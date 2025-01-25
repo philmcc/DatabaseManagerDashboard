@@ -9,7 +9,6 @@ import { useLocation } from "wouter";
 export default function ResetPassword() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [isRequestingReset, setIsRequestingReset] = useState(true);
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const searchParams = new URLSearchParams(window.location.search);

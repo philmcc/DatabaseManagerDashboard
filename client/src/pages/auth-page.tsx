@@ -79,6 +79,16 @@ export default function AuthPage() {
             >
               {isLogin ? "Need an account? Register" : "Have an account? Login"}
             </Button>
+            {isLogin && (
+              <Button
+                type="button"
+                variant="link"
+                className="w-full"
+                onClick={() => setLocation("/reset-password")}
+              >
+                Forgot Password?
+              </Button>
+            )}
           </form>
         </CardContent>
       </Card>

@@ -6,6 +6,7 @@ import NotFound from "@/pages/not-found";
 import Home from "@/pages/home";
 import Dashboard from "@/pages/dashboard";
 import AuthPage from "@/pages/auth-page";
+import ResetPassword from "@/pages/reset-password";
 import { useUser } from "@/hooks/use-user";
 import { Loader2 } from "lucide-react";
 
@@ -24,6 +25,7 @@ function Router() {
     <Switch>
       <Route path="/" component={Home} />
       <Route path="/auth" component={AuthPage} />
+      <Route path="/reset-password" component={ResetPassword} />
       <Route path="/dashboard">
         {user ? <Dashboard /> : <Home />}
       </Route>

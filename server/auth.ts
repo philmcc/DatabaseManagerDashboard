@@ -182,6 +182,7 @@ export function setupAuth(app: Express) {
         })
         .where(eq(users.id, user.id));
 
+      // Use a consistent URL format that matches our frontend routes
       const resetUrl = `http://localhost:5000/reset-password#${resetToken}`;
 
       await transporter.sendMail({

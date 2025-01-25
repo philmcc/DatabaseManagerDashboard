@@ -25,7 +25,7 @@ function Router() {
     <Switch>
       <Route path="/" component={Home} />
       <Route path="/auth" component={AuthPage} />
-      <Route path="/reset-password/*" component={ResetPassword} />
+      <Route path="/reset-password" component={ResetPassword} />
       <Route path="/dashboard">
         {user ? <Dashboard /> : <Home />}
       </Route>

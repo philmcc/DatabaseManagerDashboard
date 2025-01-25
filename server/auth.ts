@@ -182,7 +182,7 @@ export function setupAuth(app: Express) {
         })
         .where(eq(users.id, user.id));
 
-      const resetUrl = `${process.env.APP_URL || "http://localhost:5000"}/reset-password?token=${resetToken}`;
+      const resetUrl = `${process.env.APP_URL || "http://localhost:5000"}/reset-password#${resetToken}`;
 
       await transporter.sendMail({
         from: process.env.EMAIL_USER,

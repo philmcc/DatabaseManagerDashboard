@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 
 export default function ResetPassword() {
@@ -11,8 +11,8 @@ export default function ResetPassword() {
   const [password, setPassword] = useState("");
   const { toast } = useToast();
   const [, setLocation] = useLocation();
-  const searchParams = new URLSearchParams(window.location.search);
-  const token = searchParams.get("token");
+  // Get token from URL hash instead of search params
+  const token = window.location.hash.slice(1);
 
   const handleRequestReset = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,7 +69,7 @@ export default function ResetPassword() {
     }
   };
 
-  // Show reset password form if token is present in URL
+  // Show reset password form if token is present in URL hash
   if (token) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">

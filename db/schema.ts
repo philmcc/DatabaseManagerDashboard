@@ -7,6 +7,11 @@ export const users = pgTable("users", {
   password: text("password").notNull(),
   resetToken: text("resetToken"),
   resetTokenExpiry: timestamp("resetTokenExpiry"),
+  fullName: text("fullName"),
+  bio: text("bio"),
+  avatar: text("avatar"),
+  theme: text("theme").default("light"),
+  updatedAt: timestamp("updatedAt").defaultNow(),
 });
 
 export const insertUserSchema = createInsertSchema(users);

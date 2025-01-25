@@ -7,6 +7,7 @@ import Home from "@/pages/home";
 import Dashboard from "@/pages/dashboard";
 import AuthPage from "@/pages/auth-page";
 import ResetPassword from "@/pages/reset-password";
+import ProfileSettings from "@/pages/profile-settings";
 import { useUser } from "@/hooks/use-user";
 import { Loader2 } from "lucide-react";
 
@@ -26,6 +27,9 @@ function Router() {
       <Route path="/" component={Home} />
       <Route path="/auth" component={AuthPage} />
       <Route path="/reset-password" component={ResetPassword} />
+      <Route path="/profile-settings">
+        {user ? <ProfileSettings /> : <Home />}
+      </Route>
       <Route path="/dashboard">
         {user ? <Dashboard /> : <Home />}
       </Route>

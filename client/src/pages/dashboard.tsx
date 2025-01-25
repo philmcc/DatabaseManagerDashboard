@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useUser } from "@/hooks/use-user";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
+import { Settings, LogOut } from "lucide-react";
 
 export default function Dashboard() {
   const { user, logout } = useUser();
@@ -35,15 +36,24 @@ export default function Dashboard() {
       <Card className="w-full max-w-md mx-4">
         <CardHeader>
           <CardTitle className="text-2xl font-bold">
-            Welcome {user?.username}
+            Welcome {user?.fullName || user?.username}
           </CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          <Button
+            variant="outline"
+            className="w-full"
+            onClick={() => setLocation("/profile-settings")}
+          >
+            <Settings className="mr-2 h-4 w-4" />
+            Profile Settings
+          </Button>
           <Button
             variant="outline"
             className="w-full"
             onClick={handleLogout}
           >
+            <LogOut className="mr-2 h-4 w-4" />
             Logout
           </Button>
         </CardContent>

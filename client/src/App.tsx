@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import NotFound from "@/pages/not-found";
 import Home from "@/pages/home";
 import Dashboard from "@/pages/dashboard";
+import AuthPage from "@/pages/auth-page";
 import { useUser } from "@/hooks/use-user";
 import { Loader2 } from "lucide-react";
 
@@ -22,6 +23,7 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={Home} />
+      <Route path="/auth" component={AuthPage} />
       <Route path="/dashboard">
         {user ? <Dashboard /> : <Home />}
       </Route>

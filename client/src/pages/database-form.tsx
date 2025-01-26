@@ -12,6 +12,7 @@ import BaseLayout from "@/components/layout/base-layout";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Database } from "lucide-react";
 import { SelectDatabaseConnection, SelectInstance, SelectTag } from "@db/schema";
+import { useEffect } from "react";
 
 const formSchema = z.object({
   name: z.string().min(1, "Name is required"),

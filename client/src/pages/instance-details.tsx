@@ -19,9 +19,18 @@ function InstanceDetails() {
   const [location, navigate] = useLocation();
   const params = useParams<{ id: string }>();
 
-  const { data: instance, isLoading } = useQuery<InstanceWithDatabases>(
-    [`/api/instances/${params.id}`]
-  );
+  const { data: instance, isLoading } = useQuery<InstanceWithDatabases>({
+    queryKey: { scope: 'instances', id: params.id },
+    queryFn: async () => {
+      const response = await fetch(`/api/instances/${params.id}`, {
+        credentials: 'include'
+      });
+      if (!response.ok) {
+        throw new Error('Failed to fetch instance details');
+      }
+      return response.json();
+    }
+  });
 
   if (isLoading) {
     return (

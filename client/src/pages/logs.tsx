@@ -2,10 +2,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Activity } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import BaseLayout from "@/components/layout/base-layout";
-import { SelectDatabaseOperationLog } from "@db/schema";
+import { SelectDatabaseOperationLog, SelectDatabaseConnection, SelectTag } from "@db/schema";
 import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface LogDetails {
   before?: Record<string, any>;
@@ -28,10 +29,32 @@ interface DatabaseLog extends SelectDatabaseOperationLog {
 
 export default function LogsPage() {
   const [page, setPage] = useState(1);
+  const [selectedDatabase, setSelectedDatabase] = useState<string>("");
+  const [selectedTag, setSelectedTag] = useState<string>("");
   const pageSize = 20;
 
+  // Fetch databases for filter
+  const { data: databases } = useQuery<SelectDatabaseConnection[]>({
+    queryKey: ['/api/databases'],
+  });
+
+  // Fetch tags for filter
+  const { data: tags } = useQuery<SelectTag[]>({
+    queryKey: ['/api/tags'],
+  });
+
+  // Build query string with filters
+  const buildQueryString = () => {
+    const params = new URLSearchParams();
+    params.append('page', page.toString());
+    params.append('pageSize', pageSize.toString());
+    if (selectedDatabase) params.append('databaseId', selectedDatabase);
+    if (selectedTag) params.append('tagId', selectedTag);
+    return params.toString();
+  };
+
   const { data, isLoading } = useQuery<{ logs: DatabaseLog[], total: number }>({
-    queryKey: [`/api/database-logs?page=${page}&pageSize=${pageSize}`],
+    queryKey: [`/api/database-logs?${buildQueryString()}`],
   });
 
   const totalPages = data ? Math.ceil(data.total / pageSize) : 0;
@@ -46,6 +69,50 @@ export default function LogsPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
+          <div className="mb-6 flex gap-4">
+            <div className="w-64">
+              <Select 
+                value={selectedDatabase} 
+                onValueChange={(value) => {
+                  setSelectedDatabase(value);
+                  setPage(1);
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Filter by Database" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">All Databases</SelectItem>
+                  {databases?.map((db) => (
+                    <SelectItem key={db.id} value={db.id.toString()}>
+                      {db.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="w-64">
+              <Select 
+                value={selectedTag} 
+                onValueChange={(value) => {
+                  setSelectedTag(value);
+                  setPage(1);
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Filter by Tag" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">All Tags</SelectItem>
+                  {tags?.map((tag) => (
+                    <SelectItem key={tag.id} value={tag.id.toString()}>
+                      {tag.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
           {isLoading ? (
             <p className="text-center text-muted-foreground">Loading logs...</p>
           ) : !data?.logs.length ? (

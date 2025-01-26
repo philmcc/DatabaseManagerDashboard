@@ -441,11 +441,31 @@ export function registerRoutes(app: Express): Server {
       const page = parseInt(req.query.page as string) || 1;
       const pageSize = parseInt(req.query.pageSize as string) || 100;
       const offset = (page - 1) * pageSize;
+      const databaseId = req.query.databaseId ? parseInt(req.query.databaseId as string) : undefined;
+      const tagId = req.query.tagId ? parseInt(req.query.tagId as string) : undefined;
 
-      // Get total count for pagination
+      // Build where conditions
+      let whereConditions = [];
+      if (databaseId) {
+        whereConditions.push(eq(databaseOperationLogs.databaseId, databaseId));
+      }
+      if (tagId) {
+        // Join with database_tags to filter by tag
+        // This requires a more complex query since we need to join through databaseConnections
+        const databasesWithTag = db
+          .select({ id: databaseConnections.id })
+          .from(databaseConnections)
+          .innerJoin(databaseTags, eq(databaseConnections.id, databaseTags.databaseId))
+          .where(eq(databaseTags.tagId, tagId));
+
+        whereConditions.push(sql`database_operation_logs.database_id IN (${databasesWithTag})`);
+      }
+
+      // Get total count for pagination with filters
       const [{ count }] = await db
         .select({ count: sql`count(*)::integer` })
-        .from(databaseOperationLogs);
+        .from(databaseOperationLogs)
+        .where(and(...whereConditions));
 
       const logs = await db.query.databaseOperationLogs.findMany({
         with: {
@@ -457,6 +477,7 @@ export function registerRoutes(app: Express): Server {
             }
           },
         },
+        where: and(...whereConditions),
         orderBy: (logs, { desc }) => [desc(logs.timestamp)],
         limit: pageSize,
         offset: offset,

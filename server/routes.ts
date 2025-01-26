@@ -6,6 +6,7 @@ import { users, databaseConnections, tags, databaseTags, databaseOperationLogs }
 import { eq, and } from "drizzle-orm";
 import pkg from 'pg';
 const { Client } = pkg;
+import { sql } from 'drizzle-orm';
 
 export function registerRoutes(app: Express): Server {
   setupAuth(app);
@@ -431,13 +432,21 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  // Add new endpoint for fetching database operation logs
   app.get("/api/database-logs", async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
 
     try {
+      const page = parseInt(req.query.page as string) || 1;
+      const pageSize = parseInt(req.query.pageSize as string) || 100;
+      const offset = (page - 1) * pageSize;
+
+      // Get total count for pagination
+      const [{ count }] = await db
+        .select({ count: sql`count(*)::integer` })
+        .from(databaseOperationLogs);
+
       const logs = await db.query.databaseOperationLogs.findMany({
         with: {
           database: true,
@@ -449,10 +458,11 @@ export function registerRoutes(app: Express): Server {
           },
         },
         orderBy: (logs, { desc }) => [desc(logs.timestamp)],
-        limit: 100,
+        limit: pageSize,
+        offset: offset,
       });
 
-      res.json(logs);
+      res.json({ logs, total: count });
     } catch (error) {
       console.error("Database logs fetch error:", error);
       res.status(500).send("Error fetching database logs");

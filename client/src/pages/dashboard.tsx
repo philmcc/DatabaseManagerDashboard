@@ -34,6 +34,8 @@ export default function Dashboard() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [testingDatabaseId, setTestingDatabaseId] = useState<number | null>(null);
+  const [page, setPage] = useState(1);
+  const pageSize = 5;
   const queryClient = useQueryClient();
 
   const { data: databases = [], isLoading } = useQuery<SelectDatabaseConnection[]>({
@@ -41,10 +43,13 @@ export default function Dashboard() {
     enabled: !!user,
   });
 
-  const { data: logs = [], isLoading: isLoadingLogs } = useQuery<DatabaseLog[]>({
-    queryKey: ['/api/database-logs'],
+  const { data: logsData, isLoading: isLoadingLogs } = useQuery<{ logs: DatabaseLog[], total: number }>({
+    queryKey: [`/api/database-logs?page=${page}&pageSize=${pageSize}`],
     enabled: !!user,
   });
+
+  const logs = logsData?.logs || [];
+  const totalPages = logsData ? Math.ceil(logsData.total / pageSize) : 0;
 
   const { mutate: testConnection } = useMutation({
     mutationFn: async (databaseId: number) => {
@@ -195,75 +200,104 @@ export default function Dashboard() {
         <div className="mt-8">
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Activity className="h-5 w-5" />
-                Recent Database Operations
-              </CardTitle>
+              <div className="flex justify-between items-center">
+                <CardTitle className="flex items-center gap-2">
+                  <Activity className="h-5 w-5" />
+                  Recent Database Operations
+                </CardTitle>
+                <Button
+                  variant="outline"
+                  onClick={() => setLocation("/logs")}
+                >
+                  View All Logs
+                </Button>
+              </div>
             </CardHeader>
             <CardContent>
               {isLoadingLogs ? (
                 <p className="text-center text-muted-foreground">Loading logs...</p>
-              ) : logs.length === 0 ? (
+              ) : !logs.length ? (
                 <p className="text-center text-muted-foreground">No operation logs yet.</p>
               ) : (
-                <div className="space-y-4">
-                  {logs.map((log) => (
-                    <div key={log.id} className="border-b pb-4 last:border-0">
-                      <div className="flex flex-col space-y-2">
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <p className="font-medium">
-                              {log.operationType.charAt(0).toUpperCase() + log.operationType.slice(1)} - {' '}
-                              <span className={log.operationResult === 'success' ? 'text-green-600' : 'text-red-600'}>
-                                {log.operationResult}
-                              </span>
-                            </p>
-                            <p className="text-sm text-muted-foreground">
-                              {log.timestamp ? format(new Date(log.timestamp), 'PPpp') : 'Timestamp not available'}
-                            </p>
+                <>
+                  <div className="space-y-4">
+                    {logs.map((log) => (
+                      <div key={log.id} className="border-b pb-4 last:border-0">
+                        <div className="flex flex-col space-y-2">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <p className="font-medium">
+                                {log.operationType.charAt(0).toUpperCase() + log.operationType.slice(1)} - {' '}
+                                <span className={log.operationResult === 'success' ? 'text-green-600' : 'text-red-600'}>
+                                  {log.operationResult}
+                                </span>
+                              </p>
+                              <p className="text-sm text-muted-foreground">
+                                {log.timestamp ? format(new Date(log.timestamp), 'PPpp') : 'Timestamp not available'}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="text-sm text-muted-foreground bg-slate-50 p-2 rounded">
+                            {log.user && (
+                              <p className="font-medium mb-1">
+                                By: {log.user.fullName || log.user.username}
+                              </p>
+                            )}
+                            {log.database && (
+                              <p className="text-sm mb-2 text-primary">
+                                Database: {log.database.name} ({log.database.host}:{log.database.port})
+                              </p>
+                            )}
+                            {log.details.before && log.details.after && (
+                              <>
+                                <div className="mt-1">
+                                  <p className="font-medium text-xs uppercase text-gray-500">Changes:</p>
+                                  {Object.keys(log.details.before).map(key => {
+                                    const beforeVal = log.details.before?.[key];
+                                    const afterVal = log.details.after?.[key];
+                                    if (beforeVal !== afterVal) {
+                                      return (
+                                        <p key={key} className="ml-2">
+                                          <span className="font-medium">{key}:</span>{' '}
+                                          <span className="text-red-500">{beforeVal}</span>{' '}
+                                          <span className="text-gray-500">→</span>{' '}
+                                          <span className="text-green-500">{afterVal}</span>
+                                        </p>
+                                      );
+                                    }
+                                    return null;
+                                  })}
+                                </div>
+                              </>
+                            )}
+                            {log.details.error && (
+                              <p className="text-red-500">Error: {log.details.error}</p>
+                            )}
                           </div>
                         </div>
-                        <div className="text-sm text-muted-foreground bg-slate-50 p-2 rounded">
-                          {log.user && (
-                            <p className="font-medium mb-1">
-                              By: {log.user.fullName || log.user.username}
-                            </p>
-                          )}
-                          {log.database && (
-                            <p className="text-sm mb-2 text-primary">
-                              Database: {log.database.name} ({log.database.host}:{log.database.port})
-                            </p>
-                          )}
-                          {log.details.before && log.details.after && (
-                            <>
-                              <div className="mt-1">
-                                <p className="font-medium text-xs uppercase text-gray-500">Changes:</p>
-                                {Object.keys(log.details.before).map(key => {
-                                  const beforeVal = log.details.before?.[key];
-                                  const afterVal = log.details.after?.[key];
-                                  if (beforeVal !== afterVal) {
-                                    return (
-                                      <p key={key} className="ml-2">
-                                        <span className="font-medium">{key}:</span>{' '}
-                                        <span className="text-red-500">{beforeVal}</span>{' '}
-                                        <span className="text-gray-500">→</span>{' '}
-                                        <span className="text-green-500">{afterVal}</span>
-                                      </p>
-                                    );
-                                  }
-                                  return null;
-                                })}
-                              </div>
-                            </>
-                          )}
-                          {log.details.error && (
-                            <p className="text-red-500">Error: {log.details.error}</p>
-                          )}
-                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                  <div className="mt-4 flex justify-between items-center">
+                    <Button
+                      variant="outline"
+                      onClick={() => setPage(p => Math.max(1, p - 1))}
+                      disabled={page === 1}
+                    >
+                      Previous
+                    </Button>
+                    <span className="text-sm text-muted-foreground">
+                      Page {page} of {totalPages}
+                    </span>
+                    <Button
+                      variant="outline"
+                      onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                      disabled={page === totalPages}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </>
               )}
             </CardContent>
           </Card>

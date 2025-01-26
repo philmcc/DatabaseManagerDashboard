@@ -42,7 +42,7 @@ function InstanceForm() {
   const queryClient = useQueryClient();
   const isEditing = !!params.id;
 
-  const { data: instance, isLoading: isLoadingInstance } = useQuery({
+  const { data: instance, isLoading: isLoadingInstance } = useQuery<SelectInstance>({
     queryKey: [`/api/instances/${params.id}`],
     enabled: isEditing,
   });
@@ -65,6 +65,7 @@ function InstanceForm() {
     },
   });
 
+  // Update form values when existing instance data is loaded
   React.useEffect(() => {
     if (instance) {
       form.reset({

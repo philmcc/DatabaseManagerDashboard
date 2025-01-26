@@ -11,7 +11,6 @@ import BaseLayout from "@/components/layout/base-layout";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Database } from "lucide-react";
 import { SelectDatabaseConnection } from "@db/schema";
-import React from 'react';
 
 const formSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -75,6 +74,7 @@ export default function DatabaseForm() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/databases'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/database-logs'] });
     },
   });
 
@@ -98,6 +98,7 @@ export default function DatabaseForm() {
       // Invalidate both the list query and the individual database query
       queryClient.invalidateQueries({ queryKey: ['/api/databases'] });
       queryClient.invalidateQueries({ queryKey: [`/api/databases/${params.id}`] });
+      queryClient.invalidateQueries({ queryKey: ['/api/database-logs'] });
     },
   });
 

@@ -129,7 +129,7 @@ export function registerRoutes(app: Express): Server {
         user: username,
         password,
         database: databaseName,
-        ssl: { rejectUnauthorized: false } 
+        ssl: { rejectUnauthorized: false }
       });
 
       try {
@@ -255,7 +255,7 @@ export function registerRoutes(app: Express): Server {
         user: username,
         password,
         database: databaseName,
-        ssl: { rejectUnauthorized: false } 
+        ssl: { rejectUnauthorized: false }
       });
 
       try {
@@ -399,11 +399,14 @@ export function registerRoutes(app: Express): Server {
         return res.status(404).send("Instance not found");
       }
 
-      // Construct connection string with SSL mode
-      const connectionString = `postgres://${encodeURIComponent(dbConnection.username)}:${encodeURIComponent(dbConnection.password)}@${instance.hostname}:${instance.port}/${encodeURIComponent(dbConnection.databaseName)}?sslmode=require`;
-
+      // Test connection using direct configuration
       const client = new Client({
-        connectionString,
+        host: instance.hostname,
+        port: instance.port,
+        user: dbConnection.username,
+        password: dbConnection.password,
+        database: dbConnection.databaseName,
+        ssl: { rejectUnauthorized: false }
       });
 
       try {
@@ -453,56 +456,211 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  app.post("/api/test-connection", async (req, res) => {
+  // Add instance list endpoint
+  app.get("/api/instances", async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
 
     try {
-      const { instanceId, username, password, databaseName } = req.body;
-
-      // Get instance details
-      const [instance] = await db
+      const userInstances = await db
         .select()
         .from(instances)
-        .where(
-          and(
-            eq(instances.id, instanceId),
-            eq(instances.userId, req.user.id)
-          )
-        )
-        .limit(1);
+        .where(eq(instances.userId, req.user.id));
 
-      if (!instance) {
-        return res.status(404).json({
-          message: "Instance not found",
-        });
-      }
+      res.json(userInstances);
+    } catch (error) {
+      console.error("Instances fetch error:", error);
+      res.status(500).send("Error fetching instances");
+    }
+  });
 
-      // Test connection using instance details
+  // Add instance creation route
+  app.post("/api/clusters/:clusterId/instances", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { clusterId } = req.params;
+      const { hostname, port, username, password, description, isWriter, defaultDatabaseName } = req.body;
+
+      // Test connection first
       const client = new Client({
-        host: instance.hostname,
-        port: instance.port,
+        host: hostname,
+        port,
         user: username,
         password,
-        database: databaseName,
+        database: defaultDatabaseName || 'postgres',
         ssl: { rejectUnauthorized: false }
       });
 
       try {
         await client.connect();
         await client.end();
-
-        res.json({ message: "Connection successful" });
       } catch (error: any) {
-        res.status(400).json({
-          message: "Failed to connect to database",
+        return res.status(400).json({
+          message: "Failed to connect to database instance",
           error: error.message,
         });
       }
+
+      // If connection test passed, create the instance
+      const [newInstance] = await db
+        .insert(instances)
+        .values({
+          hostname,
+          port,
+          username,
+          password,
+          description,
+          isWriter,
+          defaultDatabaseName,
+          clusterId: parseInt(clusterId),
+          userId: req.user.id,
+        })
+        .returning();
+
+      // If this is a writer instance, update other instances in the cluster to be readers
+      if (isWriter) {
+        await db
+          .update(instances)
+          .set({ isWriter: false })
+          .where(
+            and(
+              eq(instances.clusterId, parseInt(clusterId)),
+              ne(instances.id, newInstance.id)
+            )
+          );
+      }
+
+      res.json(newInstance);
     } catch (error) {
-      console.error("Connection test error:", error);
-      res.status(500).send("Error testing connection");
+      console.error("Instance creation error:", error);
+      res.status(500).json({
+        message: "Error creating instance",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // Add instance update endpoint
+  app.patch("/api/instances/:id", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { id } = req.params;
+      const { hostname, port, username, password, description, isWriter, defaultDatabaseName } = req.body;
+
+      // Get existing instance
+      const [existingInstance] = await db
+        .select()
+        .from(instances)
+        .where(
+          and(
+            eq(instances.id, parseInt(id)),
+            eq(instances.userId, req.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!existingInstance) {
+        return res.status(404).send("Instance not found");
+      }
+
+      // Test connection first
+      const client = new Client({
+        host: hostname,
+        port,
+        user: username,
+        password,
+        database: defaultDatabaseName || 'postgres',
+        ssl: { rejectUnauthorized: false }
+      });
+
+      try {
+        await client.connect();
+        await client.end();
+      } catch (error: any) {
+        return res.status(400).json({
+          message: "Failed to connect to database instance",
+          error: error.message,
+        });
+      }
+
+      // Update the instance
+      const [updatedInstance] = await db
+        .update(instances)
+        .set({
+          hostname,
+          port,
+          username,
+          password,
+          description,
+          isWriter,
+          defaultDatabaseName,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(instances.id, parseInt(id)),
+            eq(instances.userId, req.user.id)
+          )
+        )
+        .returning();
+
+      // If this instance is set as writer, update other instances in the cluster to be readers
+      if (isWriter) {
+        await db
+          .update(instances)
+          .set({ isWriter: false })
+          .where(
+            and(
+              eq(instances.clusterId, updatedInstance.clusterId),
+              ne(instances.id, updatedInstance.id)
+            )
+          );
+      }
+
+      res.json(updatedInstance);
+    } catch (error) {
+      console.error("Instance update error:", error);
+      res.status(500).json({
+        message: "Error updating instance",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // Add instance fetch endpoint
+  app.get("/api/instances/:id", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { id } = req.params;
+      const [instance] = await db
+        .select()
+        .from(instances)
+        .where(
+          and(
+            eq(instances.id, parseInt(id)),
+            eq(instances.userId, req.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!instance) {
+        return res.status(404).send("Instance not found");
+      }
+
+      res.json(instance);
+    } catch (error) {
+      console.error("Instance fetch error:", error);
+      res.status(500).send("Error fetching instance");
     }
   });
 
@@ -638,7 +796,7 @@ export function registerRoutes(app: Express): Server {
         user: dbConnection.username,
         password: dbConnection.password,
         database: dbConnection.databaseName,
-        ssl: { rejectUnauthorized: false } 
+        ssl: { rejectUnauthorized: false }
       });
 
       try {
@@ -871,215 +1029,6 @@ export function registerRoutes(app: Express): Server {
       res.status(500).send("Error updating cluster");
     }
   });
-
-  // Add instance list endpoint
-  app.get("/api/instances", async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).send("Not authenticated");
-    }
-
-    try {
-      const userInstances = await db
-        .select()
-        .from(instances)
-        .where(eq(instances.userId, req.user.id));
-
-      res.json(userInstances);
-    } catch (error) {
-      console.error("Instances fetch error:", error);
-      res.status(500).send("Error fetching instances");
-    }
-  });
-
-  // Add instance creation route
-  app.post("/api/clusters/:clusterId/instances", async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).send("Not authenticated");
-    }
-
-    try {
-      const { clusterId } = req.params;
-      const { hostname, port, username, password, description, isWriter, defaultDatabaseName } = req.body;
-
-      // Test connection first
-      const client = new Client({
-        host: hostname,
-        port,
-        user: username,
-        password,
-        database: defaultDatabaseName || 'postgres',
-        ssl: { rejectUnauthorized: false } 
-      });
-
-      try {
-        await client.connect();
-        await client.end();
-      } catch (error: any) {
-        return res.status(400).json({
-          message: "Failed to connect to database instance",
-          error: error.message,
-        });
-      }
-
-      // If connection test passed, create the instance
-      const [newInstance] = await db
-        .insert(instances)
-        .values({
-          hostname,
-          port,
-          username,
-          password,
-          description,
-          isWriter,
-          defaultDatabaseName,
-          clusterId: parseInt(clusterId),
-          userId: req.user.id,
-        })
-        .returning();
-
-      // If this is a writer instance, update other instances in the cluster to be readers
-      if (isWriter) {
-        await db
-          .update(instances)
-          .set({ isWriter: false })
-          .where(
-            and(
-              eq(instances.clusterId, parseInt(clusterId)),
-              ne(instances.id, newInstance.id)
-            )
-          );
-      }
-
-      res.json(newInstance);
-    } catch (error) {
-      console.error("Instance creation error:", error);
-      res.status(500).json({
-        message: "Error creating instance",
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  });
-
-  // Add instance update endpoint
-  app.patch("/api/instances/:id", async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).send("Not authenticated");
-    }
-
-    try {
-      const { id } = req.params;
-      const { hostname, port, username, password, description, isWriter, defaultDatabaseName } = req.body;
-
-      // Get existing instance
-      const [existingInstance] = await db
-        .select()
-        .from(instances)
-        .where(
-          and(
-            eq(instances.id, parseInt(id)),
-            eq(instances.userId, req.user.id)
-          )
-        )
-        .limit(1);
-
-      if (!existingInstance) {
-        return res.status(404).send("Instance not found");
-      }
-
-      // Test connection first
-      const client = new Client({
-        host: hostname,
-        port,
-        user: username,
-        password,
-        database: defaultDatabaseName || 'postgres',
-        ssl: { rejectUnauthorized: false } 
-      });
-
-      try {
-        await client.connect();
-        await client.end();
-      } catch (error: any) {
-        return res.status(400).json({
-          message: "Failed to connect to database instance",
-          error: error.message,
-        });
-      }
-
-      // Update the instance
-      const [updatedInstance] = await db
-        .update(instances)
-        .set({
-          hostname,
-          port,
-          username,
-          password,
-          description,
-          isWriter,
-          defaultDatabaseName,
-          updatedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(instances.id, parseInt(id)),
-            eq(instances.userId, req.user.id)
-          )
-        )
-        .returning();
-
-      // If this instance is set as writer, update other instances in the cluster to be readers
-      if (isWriter) {
-        await db
-          .update(instances)
-          .set({ isWriter: false })
-          .where(
-            and(
-              eq(instances.clusterId, updatedInstance.clusterId),
-              ne(instances.id, updatedInstance.id)
-            )
-          );
-      }
-
-      res.json(updatedInstance);
-    } catch (error) {
-      console.error("Instance update error:", error);
-      res.status(500).json({
-        message: "Error updating instance",
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  });
-
-  // Add instance fetch endpoint
-  app.get("/api/instances/:id", async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).send("Not authenticated");
-    }
-
-    try {
-      const { id } = req.params;
-      const [instance] = await db
-        .select()
-        .from(instances)
-        .where(
-          and(
-            eq(instances.id, parseInt(id)),
-            eq(instances.userId, req.user.id)
-          )
-        )
-        .limit(1);
-
-      if (!instance) {
-        return res.status(404).send("Instance not found");
-      }
-
-      res.json(instance);
-    } catch (error) {
-      console.error("Instance fetch error:", error);
-      res.status(500).send("Error fetching instance");
-    }
-  });
-
 
   const httpServer = createServer(app);  return httpServer;
 }

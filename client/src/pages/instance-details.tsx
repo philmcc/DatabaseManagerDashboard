@@ -20,7 +20,7 @@ function InstanceDetails() {
   const params = useParams<{ id: string }>();
 
   const { data: instance, isLoading } = useQuery<InstanceWithDatabases>({
-    queryKey: { scope: 'instances', id: params.id },
+    queryKey: ['/api/instances', params.id],
     queryFn: async () => {
       const response = await fetch(`/api/instances/${params.id}`, {
         credentials: 'include'
@@ -58,7 +58,7 @@ function InstanceDetails() {
           {instance.hostname}
         </h1>
         <Button asChild>
-          <Link href={`/instances/${instance.id}/edit`}>
+          <Link href={`/clusters/${instance.cluster.id}/instances/${instance.id}/edit`}>
             <Edit2 className="mr-2 h-4 w-4" />
             Edit Instance
           </Link>
@@ -82,6 +82,10 @@ function InstanceDetails() {
               <Badge variant={instance.isWriter ? "default" : "secondary"}>
                 {instance.isWriter ? "Writer" : "Reader"}
               </Badge>
+            </div>
+            <div>
+              <h3 className="font-medium">Port</h3>
+              <p>{instance.port}</p>
             </div>
             {instance.defaultDatabaseName && (
               <div>
@@ -110,7 +114,7 @@ function InstanceDetails() {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {instance.databases.map((db) => (
+              {instance.databases && instance.databases.map((db) => (
                 <Link key={db.id} href={`/databases/${db.id}`}>
                   <div className="p-4 rounded-lg border hover:bg-accent/50 transition-colors">
                     <div className="flex items-center justify-between">
@@ -120,7 +124,7 @@ function InstanceDetails() {
                   </div>
                 </Link>
               ))}
-              {instance.databases.length === 0 && (
+              {(!instance.databases || instance.databases.length === 0) && (
                 <p className="text-center text-muted-foreground py-4">
                   No databases configured for this instance
                 </p>

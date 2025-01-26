@@ -20,20 +20,22 @@ const formSchema = z.object({
   databaseName: z.string().min(1, "Database name is required"),
 });
 
+type FormData = z.infer<typeof formSchema>;
+
 export default function DatabaseForm() {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
 
-  const form = useForm<z.infer<typeof formSchema>>({
+  const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       port: 5432, // Default PostgreSQL port
     },
   });
 
-  const { mutateAsync: createDatabase, isLoading } = useMutation({
-    mutationFn: async (values: z.infer<typeof formSchema>) => {
+  const { mutateAsync: createDatabase, isPending } = useMutation({
+    mutationFn: async (values: FormData) => {
       const res = await fetch("/api/databases", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -53,7 +55,7 @@ export default function DatabaseForm() {
     },
   });
 
-  const onSubmit = async (values: z.infer<typeof formSchema>) => {
+  const onSubmit = async (values: FormData) => {
     try {
       await createDatabase(values);
       toast({
@@ -175,8 +177,8 @@ export default function DatabaseForm() {
                   >
                     Cancel
                   </Button>
-                  <Button type="submit" disabled={isLoading}>
-                    {isLoading ? "Adding..." : "Add Database"}
+                  <Button type="submit" disabled={isPending}>
+                    {isPending ? "Adding..." : "Add Database"}
                   </Button>
                 </div>
               </form>

@@ -474,20 +474,20 @@ export function registerRoutes(app: Express): Server {
       const tagId = req.query.tagId ? parseInt(req.query.tagId as string) : undefined;
 
       // Build where conditions
-      let whereConditions = [];
+      let whereConditions = [eq(databaseOperationLogs.userId, req.user.id)];
       if (databaseId) {
         whereConditions.push(eq(databaseOperationLogs.databaseId, databaseId));
       }
       if (tagId) {
-        // Join with database_tags to filter by tag
-        // This requires a more complex query since we need to join through databaseConnections
+        // Get all database IDs that have the selected tag
         const databasesWithTag = db
-          .select({ id: databaseConnections.id })
-          .from(databaseConnections)
-          .innerJoin(databaseTags, eq(databaseConnections.id, databaseTags.databaseId))
+          .select({ databaseId: databaseTags.databaseId })
+          .from(databaseTags)
           .where(eq(databaseTags.tagId, tagId));
 
-        whereConditions.push(sql`database_operation_logs.database_id IN (${databasesWithTag})`);
+        whereConditions.push(
+          sql`${databaseOperationLogs.databaseId} IN (${databasesWithTag})`
+        );
       }
 
       // Get total count for pagination with filters

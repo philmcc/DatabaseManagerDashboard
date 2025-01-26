@@ -43,12 +43,10 @@ export const instances = pgTable("instances", {
 export const databaseConnections = pgTable("database_connections", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
-  host: text("host").notNull(),
-  port: integer("port").notNull(),
+  instanceId: integer("instance_id").notNull().references(() => instances.id, { onDelete: 'cascade' }),
   username: text("username").notNull(),
   password: text("password").notNull(),
   databaseName: text("database_name").notNull(),
-  instanceId: integer("instance_id").references(() => instances.id, { onDelete: 'cascade' }),
   userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
   createdAt: timestamp("createdAt").defaultNow(),
   updatedAt: timestamp("updatedAt").defaultNow(),
@@ -69,21 +67,67 @@ export const databaseTags = pgTable("database_tags", {
   pk: primaryKey({ columns: [table.databaseId, table.tagId] }),
 }));
 
-export const clusterTags = pgTable("cluster_tags", {
-  clusterId: integer("cluster_id").notNull().references(() => clusters.id, { onDelete: 'cascade' }),
-  tagId: integer("tag_id").notNull().references(() => tags.id, { onDelete: 'cascade' }),
-}, (table) => ({
-  pk: primaryKey({ columns: [table.clusterId, table.tagId] }),
+// Add relations for tags
+export const databaseTagsRelations = relations(databaseTags, ({ one }) => ({
+  database: one(databaseConnections, {
+    fields: [databaseTags.databaseId],
+    references: [databaseConnections.id],
+  }),
+  tag: one(tags, {
+    fields: [databaseTags.tagId],
+    references: [tags.id],
+  }),
 }));
 
-export const instanceTags = pgTable("instance_tags", {
-  instanceId: integer("instance_id").notNull().references(() => instances.id, { onDelete: 'cascade' }),
-  tagId: integer("tag_id").notNull().references(() => tags.id, { onDelete: 'cascade' }),
-}, (table) => ({
-  pk: primaryKey({ columns: [table.instanceId, table.tagId] }),
+// Relations
+export const userRelations = relations(users, ({ many }) => ({
+  databaseConnections: many(databaseConnections),
+  tags: many(tags),
+  clusters: many(clusters),
+  instances: many(instances),
 }));
 
-// Add new tables for operation logs and metrics
+export const clusterRelations = relations(clusters, ({ one, many }) => ({
+  user: one(users, {
+    fields: [clusters.userId],
+    references: [users.id],
+  }),
+  instances: many(instances),
+}));
+
+export const instanceRelations = relations(instances, ({ one, many }) => ({
+  cluster: one(clusters, {
+    fields: [instances.clusterId],
+    references: [clusters.id],
+  }),
+  user: one(users, {
+    fields: [instances.userId],
+    references: [users.id],
+  }),
+  databases: many(databaseConnections),
+}));
+
+export const databaseConnectionRelations = relations(databaseConnections, ({ one, many }) => ({
+  user: one(users, {
+    fields: [databaseConnections.userId],
+    references: [users.id],
+  }),
+  instance: one(instances, {
+    fields: [databaseConnections.instanceId],
+    references: [instances.id],
+  }),
+  tags: many(databaseTags),
+}));
+
+export const tagsRelations = relations(tags, ({ one, many }) => ({
+  user: one(users, {
+    fields: [tags.userId],
+    references: [users.id],
+  }),
+  databases: many(databaseTags),
+}));
+
+
 export const databaseOperationLogs = pgTable("database_operation_logs", {
   id: serial("id").primaryKey(),
   databaseId: integer("database_id").references(() => databaseConnections.id, { onDelete: 'cascade' }),
@@ -105,59 +149,6 @@ export const databaseMetrics = pgTable("database_metrics", {
   cacheHitRatio: numeric("cache_hit_ratio").notNull(),
   metrics: json("metrics").notNull(),
 });
-
-
-// Relations
-export const userRelations = relations(users, ({ many }) => ({
-  databaseConnections: many(databaseConnections),
-  tags: many(tags),
-  clusters: many(clusters),
-  instances: many(instances),
-}));
-
-export const clusterRelations = relations(clusters, ({ one, many }) => ({
-  user: one(users, {
-    fields: [clusters.userId],
-    references: [users.id],
-  }),
-  instances: many(instances),
-  tags: many(clusterTags),
-}));
-
-export const instanceRelations = relations(instances, ({ one, many }) => ({
-  cluster: one(clusters, {
-    fields: [instances.clusterId],
-    references: [clusters.id],
-  }),
-  user: one(users, {
-    fields: [instances.userId],
-    references: [users.id],
-  }),
-  databases: many(databaseConnections),
-  tags: many(instanceTags),
-}));
-
-export const databaseConnectionsRelations = relations(databaseConnections, ({ one, many }) => ({
-  user: one(users, {
-    fields: [databaseConnections.userId],
-    references: [users.id],
-  }),
-  instance: one(instances, {
-    fields: [databaseConnections.instanceId],
-    references: [instances.id],
-  }),
-  tags: many(databaseTags),
-}));
-
-export const tagsRelations = relations(tags, ({ one, many }) => ({
-  user: one(users, {
-    fields: [tags.userId],
-    references: [users.id],
-  }),
-  databases: many(databaseTags),
-  clusters: many(clusterTags),
-  instances: many(instanceTags),
-}));
 
 // Add relations for the new tables
 export const databaseOperationLogsRelations = relations(databaseOperationLogs, ({ one }) => ({

@@ -102,12 +102,30 @@ export function registerRoutes(app: Express): Server {
     }
 
     try {
-      const { name, host, port, username, password, databaseName, tags: tagIds } = req.body;
+      const { name, instanceId, username, password, databaseName, tags: tagIds } = req.body;
 
-      // Test connection first
+      // Get instance details
+      const [instance] = await db
+        .select()
+        .from(instances)
+        .where(
+          and(
+            eq(instances.id, instanceId),
+            eq(instances.userId, req.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!instance) {
+        return res.status(404).json({
+          message: "Instance not found",
+        });
+      }
+
+      // Test connection first using instance details
       const client = new Client({
-        host,
-        port,
+        host: instance.hostname,
+        port: instance.port,
         user: username,
         password,
         database: databaseName,
@@ -124,7 +142,7 @@ export function registerRoutes(app: Express): Server {
           operationResult: 'failure',
           details: {
             error: error.message,
-            connectionDetails: { name, host, port, username, databaseName }
+            connectionDetails: { name, instanceId, username, databaseName }
           },
         });
 
@@ -139,8 +157,7 @@ export function registerRoutes(app: Express): Server {
         .insert(databaseConnections)
         .values({
           name,
-          host,
-          port,
+          instanceId,
           username,
           password,
           databaseName,
@@ -166,8 +183,7 @@ export function registerRoutes(app: Express): Server {
         operationResult: 'success',
         details: {
           name: newDatabase.name,
-          host: newDatabase.host,
-          port: newDatabase.port,
+          instanceId: newDatabase.instanceId,
           databaseName: newDatabase.databaseName,
         },
       });
@@ -186,7 +202,7 @@ export function registerRoutes(app: Express): Server {
 
     try {
       const { id } = req.params;
-      const { name, host, port, username, password, databaseName, tags: tagIds } = req.body;
+      const { name, instanceId, username, password, databaseName, tags: tagIds } = req.body;
 
       // Get existing database details before update
       const [existingDatabase] = await db
@@ -204,6 +220,24 @@ export function registerRoutes(app: Express): Server {
         return res.status(404).send("Database not found");
       }
 
+      // Get instance details
+      const [instance] = await db
+        .select()
+        .from(instances)
+        .where(
+          and(
+            eq(instances.id, instanceId),
+            eq(instances.userId, req.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!instance) {
+        return res.status(404).json({
+          message: "Instance not found",
+        });
+      }
+
       // Get existing tags
       const existingTags = await db
         .select()
@@ -213,10 +247,10 @@ export function registerRoutes(app: Express): Server {
       const existingTagIds = existingTags.map(t => t.tagId);
       const newTagIds = tagIds || [];
 
-      // Test connection first
+      // Test connection first using instance details
       const client = new Client({
-        host,
-        port,
+        host: instance.hostname,
+        port: instance.port,
         user: username,
         password,
         database: databaseName,
@@ -236,16 +270,14 @@ export function registerRoutes(app: Express): Server {
             error: error.message,
             before: {
               name: existingDatabase.name,
-              host: existingDatabase.host,
-              port: existingDatabase.port,
+              instanceId: existingDatabase.instanceId,
               username: existingDatabase.username,
               databaseName: existingDatabase.databaseName,
               tags: existingTagIds
             },
             attempted: {
               name,
-              host,
-              port,
+              instanceId,
               username,
               databaseName,
               tags: newTagIds
@@ -264,8 +296,7 @@ export function registerRoutes(app: Express): Server {
         .update(databaseConnections)
         .set({
           name,
-          host,
-          port,
+          instanceId,
           username,
           password,
           databaseName,
@@ -311,16 +342,14 @@ export function registerRoutes(app: Express): Server {
         details: {
           before: {
             name: existingDatabase.name,
-            host: existingDatabase.host,
-            port: existingDatabase.port,
+            instanceId: existingDatabase.instanceId,
             username: existingDatabase.username,
             databaseName: existingDatabase.databaseName,
             tags: getTagNames(existingTagIds)
           },
           after: {
             name: updatedDatabase.name,
-            host: updatedDatabase.host,
-            port: updatedDatabase.port,
+            instanceId: updatedDatabase.instanceId,
             username: updatedDatabase.username,
             databaseName: updatedDatabase.databaseName,
             tags: getTagNames(newTagIds)
@@ -328,13 +357,7 @@ export function registerRoutes(app: Express): Server {
         },
       });
 
-      // Return updated database with tags
-      const databaseWithTags = {
-        ...updatedDatabase,
-        tags: tagIds.map((tagId: number) => ({ tagId }))
-      };
-
-      res.json(databaseWithTags);
+      res.json(updatedDatabase);
     } catch (error) {
       console.error("Database update error:", error);
       res.status(500).send("Error updating database connection");
@@ -843,7 +866,7 @@ export function registerRoutes(app: Express): Server {
           );
       }
 
-      res.status(201).json(newInstance);
+      res.json(newInstance);
     } catch (error) {
       console.error("Instance creation error:", error);
       res.status(500).json({

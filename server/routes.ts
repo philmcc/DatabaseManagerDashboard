@@ -54,11 +54,22 @@ export function registerRoutes(app: Express): Server {
               tag: true,
             },
           },
-          instance: true, // Include instance details
+          instance: true,
         },
       });
 
-      res.json(userDatabases);
+      // Transform response to include formatted instance details
+      const formattedDatabases = userDatabases.map(db => ({
+        ...db,
+        instanceDetails: db.instance ? {
+          id: db.instance.id,
+          hostname: db.instance.hostname,
+          port: db.instance.port,
+          description: db.instance.description,
+        } : null
+      }));
+
+      res.json(formattedDatabases);
     } catch (error) {
       console.error("Database fetch error:", error);
       res.status(500).send("Error fetching databases");
@@ -83,7 +94,7 @@ export function registerRoutes(app: Express): Server {
               tag: true,
             },
           },
-          instance: true, // Include instance details
+          instance: true,
         },
       });
 
@@ -91,7 +102,18 @@ export function registerRoutes(app: Express): Server {
         return res.status(404).send("Database not found");
       }
 
-      res.json(database);
+      // Transform response to include formatted instance details
+      const formattedDatabase = {
+        ...database,
+        instanceDetails: database.instance ? {
+          id: database.instance.id,
+          hostname: database.instance.hostname,
+          port: database.instance.port,
+          description: database.instance.description,
+        } : null
+      };
+
+      res.json(formattedDatabase);
     } catch (error) {
       console.error("Database fetch error:", error);
       res.status(500).send("Error fetching database");
@@ -665,7 +687,6 @@ export function registerRoutes(app: Express): Server {
       res.status(500).send("Error fetching instance");
     }
   });
-
 
 
   // Tags Management Endpoints

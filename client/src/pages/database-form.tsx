@@ -11,6 +11,7 @@ import BaseLayout from "@/components/layout/base-layout";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Database } from "lucide-react";
 import { SelectDatabaseConnection } from "@db/schema";
+import { useEffect } from "react";
 
 const formSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -43,7 +44,7 @@ export default function DatabaseForm() {
   });
 
   // Update form values when existing database data is loaded
-  React.useEffect(() => {
+  useEffect(() => {
     if (existingDatabase) {
       form.reset({
         name: existingDatabase.name,

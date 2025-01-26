@@ -95,7 +95,9 @@ export default function DatabaseForm() {
       return res.json();
     },
     onSuccess: () => {
+      // Invalidate both the list query and the individual database query
       queryClient.invalidateQueries({ queryKey: ['/api/databases'] });
+      queryClient.invalidateQueries({ queryKey: [`/api/databases/${params.id}`] });
     },
   });
 

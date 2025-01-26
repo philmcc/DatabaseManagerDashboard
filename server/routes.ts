@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { setupAuth } from "./auth";
 import { db } from "@db";
-import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics } from "@db/schema";
+import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics, clusters, instances } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import pkg from 'pg';
 const { Client } = pkg;
@@ -666,6 +666,114 @@ export function registerRoutes(app: Express): Server {
       });
     }
   });
+
+  // Clusters Management Endpoints
+  app.get("/api/clusters", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const userClusters = await db.query.clusters.findMany({
+        where: eq(clusters.userId, req.user.id),
+        with: {
+          instances: true,
+        },
+      });
+
+      res.json(userClusters);
+    } catch (error) {
+      console.error("Clusters fetch error:", error);
+      res.status(500).send("Error fetching clusters");
+    }
+  });
+
+  app.post("/api/clusters", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { name, description } = req.body;
+      const [newCluster] = await db
+        .insert(clusters)
+        .values({
+          name,
+          description,
+          userId: req.user.id,
+        })
+        .returning();
+
+      res.status(201).json(newCluster);
+    } catch (error) {
+      console.error("Cluster creation error:", error);
+      res.status(500).send("Error creating cluster");
+    }
+  });
+
+  app.get("/api/clusters/:id", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { id } = req.params;
+      const cluster = await db.query.clusters.findFirst({
+        where: and(
+          eq(clusters.id, parseInt(id)),
+          eq(clusters.userId, req.user.id)
+        ),
+        with: {
+          instances: true,
+        },
+      });
+
+      if (!cluster) {
+        return res.status(404).send("Cluster not found");
+      }
+
+      res.json(cluster);
+    } catch (error) {
+      console.error("Cluster fetch error:", error);
+      res.status(500).send("Error fetching cluster");
+    }
+  });
+
+  app.patch("/api/clusters/:id", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { id } = req.params;
+      const { name, description } = req.body;
+
+      const [updatedCluster] = await db
+        .update(clusters)
+        .set({
+          name,
+          description,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(clusters.id, parseInt(id)),
+            eq(clusters.userId, req.user.id)
+          )
+        )
+        .returning();
+
+      if (!updatedCluster) {
+        return res.status(404).send("Cluster not found");
+      }
+
+      res.json(updatedCluster);
+    } catch (error) {
+      console.error("Cluster update error:", error);
+      res.status(500).send("Error updating cluster");
+    }
+  });
+
 
   const httpServer = createServer(app);
   return httpServer;

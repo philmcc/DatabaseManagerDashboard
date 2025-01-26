@@ -3,13 +3,21 @@ import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { PlusCircle } from "lucide-react";
-import { Loader2 } from "lucide-react";
+import { PlusCircle, Loader2 } from "lucide-react";
 import type { SelectCluster } from "@db/schema";
 
 function ClustersPage() {
   const [location, navigate] = useLocation();
-  const { data: clusters, isLoading } = useQuery<SelectCluster[]>(["/api/clusters"]);
+  const { data: clusters, isLoading } = useQuery({
+    queryKey: ['clusters'],
+    queryFn: async () => {
+      const response = await fetch('/api/clusters');
+      if (!response.ok) {
+        throw new Error('Failed to fetch clusters');
+      }
+      return response.json();
+    }
+  });
 
   if (isLoading) {
     return (
@@ -49,7 +57,7 @@ function ClustersPage() {
             </CardContent>
           </Card>
         ))}
-        {clusters?.length === 0 && (
+        {!clusters?.length && (
           <Card className="col-span-full">
             <CardContent className="py-8">
               <div className="text-center text-muted-foreground">

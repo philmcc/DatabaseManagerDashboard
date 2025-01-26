@@ -37,13 +37,6 @@ export const instances = pgTable("instances", {
   updatedAt: timestamp("updatedAt").defaultNow(),
 });
 
-export const tags = pgTable("tags", {
-  id: serial("id").primaryKey(),
-  name: text("name").notNull().unique(),
-  createdAt: timestamp("createdAt").defaultNow(),
-  userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
-});
-
 export const databaseConnections = pgTable("database_connections", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
@@ -52,13 +45,20 @@ export const databaseConnections = pgTable("database_connections", {
   username: text("username").notNull(),
   password: text("password").notNull(),
   databaseName: text("database_name").notNull(),
-  instanceId: integer("instance_id").notNull().references(() => instances.id, { onDelete: 'cascade' }),
+  instanceId: integer("instance_id").references(() => instances.id, { onDelete: 'cascade' }), 
+  userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
   createdAt: timestamp("createdAt").defaultNow(),
   updatedAt: timestamp("updatedAt").defaultNow(),
+});
+
+export const tags = pgTable("tags", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull().unique(),
+  createdAt: timestamp("createdAt").defaultNow(),
   userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
 });
 
-// Junction tables with explicit primary keys
+// Junction tables
 export const databaseTags = pgTable("database_tags", {
   databaseId: integer("database_id").notNull().references(() => databaseConnections.id, { onDelete: 'cascade' }),
   tagId: integer("tag_id").notNull().references(() => tags.id, { onDelete: 'cascade' }),
@@ -79,29 +79,6 @@ export const instanceTags = pgTable("instance_tags", {
 }, (table) => ({
   pk: primaryKey({ columns: [table.instanceId, table.tagId] }),
 }));
-
-// Logging and metrics tables
-export const databaseOperationLogs = pgTable("database_operation_logs", {
-  id: serial("id").primaryKey(),
-  databaseId: integer("database_id").references(() => databaseConnections.id, { onDelete: 'cascade' }),
-  userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
-  operationType: text("operation_type").notNull(),
-  operationResult: text("operation_result").notNull(),
-  details: json("details"),
-  timestamp: timestamp("timestamp").defaultNow(),
-});
-
-export const databaseMetrics = pgTable("database_metrics", {
-  id: serial("id").primaryKey(),
-  databaseId: integer("database_id").notNull().references(() => databaseConnections.id, { onDelete: 'cascade' }),
-  timestamp: timestamp("timestamp").defaultNow(),
-  activeConnections: integer("active_connections"),
-  databaseSize: decimal("database_size"),
-  slowQueries: integer("slow_queries"),
-  avgQueryTime: decimal("avg_query_time"),
-  cacheHitRatio: decimal("cache_hit_ratio"),
-  metrics: json("metrics").notNull(),
-});
 
 // Relations
 export const userRelations = relations(users, ({ many }) => ({
@@ -165,12 +142,6 @@ export const selectTagSchema = createSelectSchema(tags);
 export const insertDatabaseConnectionSchema = createInsertSchema(databaseConnections);
 export const selectDatabaseConnectionSchema = createSelectSchema(databaseConnections);
 
-export const insertDatabaseOperationLogSchema = createInsertSchema(databaseOperationLogs);
-export const selectDatabaseOperationLogSchema = createSelectSchema(databaseOperationLogs);
-
-export const insertDatabaseMetricsSchema = createInsertSchema(databaseMetrics);
-export const selectDatabaseMetricsSchema = createSelectSchema(databaseMetrics);
-
 export const insertClusterSchema = createInsertSchema(clusters);
 export const selectClusterSchema = createSelectSchema(clusters);
 
@@ -186,12 +157,6 @@ export type SelectTag = typeof tags.$inferSelect;
 
 export type InsertDatabaseConnection = typeof databaseConnections.$inferInsert;
 export type SelectDatabaseConnection = typeof databaseConnections.$inferSelect;
-
-export type InsertDatabaseOperationLog = typeof databaseOperationLogs.$inferInsert;
-export type SelectDatabaseOperationLog = typeof databaseOperationLogs.$inferSelect;
-
-export type InsertDatabaseMetrics = typeof databaseMetrics.$inferInsert;
-export type SelectDatabaseMetrics = typeof databaseMetrics.$inferSelect;
 
 export type InsertCluster = typeof clusters.$inferInsert;
 export type SelectCluster = typeof clusters.$inferSelect;

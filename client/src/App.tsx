@@ -10,6 +10,7 @@ import ResetPassword from "@/pages/reset-password";
 import ProfileSettings from "@/pages/profile-settings";
 import DatabaseForm from "@/pages/database-form";
 import LogsPage from "@/pages/logs";
+import TagsPage from "@/pages/tags";
 import { useUser } from "@/hooks/use-user";
 import { Loader2 } from "lucide-react";
 
@@ -37,6 +38,9 @@ function Router() {
       </Route>
       <Route path="/logs">
         {user ? <LogsPage /> : <Home />}
+      </Route>
+      <Route path="/tags">
+        {user ? <TagsPage /> : <Home />}
       </Route>
       <Route path="/databases/new">
         {user ? <DatabaseForm /> : <Home />}

@@ -13,6 +13,7 @@ import DatabaseDetails from "@/pages/database-details";
 import LogsPage from "@/pages/logs";
 import TagsPage from "@/pages/tags";
 import ClustersPage from "@/pages/clusters";
+import ClusterForm from "@/pages/cluster-form";
 import { useUser } from "@/hooks/use-user";
 import { Loader2 } from "lucide-react";
 
@@ -55,6 +56,9 @@ function Router() {
       </Route>
       <Route path="/clusters">
         {user ? <ClustersPage /> : <Home />}
+      </Route>
+      <Route path="/clusters/new">
+        {user ? <ClusterForm /> : <Home />}
       </Route>
       <Route component={NotFound} />
     </Switch>

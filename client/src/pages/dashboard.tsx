@@ -21,6 +21,11 @@ interface DatabaseLog extends SelectDatabaseOperationLog {
     username: string;
     fullName: string | null;
   };
+  database?: {
+    name: string;
+    host: string;
+    port: number;
+  };
   details: LogDetails;
 }
 
@@ -222,6 +227,11 @@ export default function Dashboard() {
                           {log.user && (
                             <p className="font-medium mb-1">
                               By: {log.user.fullName || log.user.username}
+                            </p>
+                          )}
+                          {log.database && (
+                            <p className="text-sm mb-2 text-primary">
+                              Database: {log.database.name} ({log.database.host}:{log.database.port})
                             </p>
                           )}
                           {log.details.before && log.details.after && (

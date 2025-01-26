@@ -4,7 +4,7 @@ import { useUser } from "@/hooks/use-user";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import { Settings, LogOut, Database, Activity } from "lucide-react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import BaseLayout from "@/components/layout/base-layout";
 import { SelectDatabaseConnection, SelectDatabaseOperationLog } from "@db/schema";
 import { useState } from "react";
@@ -15,6 +15,7 @@ export default function Dashboard() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [testingDatabaseId, setTestingDatabaseId] = useState<number | null>(null);
+  const queryClient = useQueryClient();
 
   const { data: databases = [], isLoading } = useQuery<SelectDatabaseConnection[]>({
     queryKey: ['/api/databases'],
@@ -50,6 +51,8 @@ export default function Dashboard() {
         title: "Success",
         description: data.message,
       });
+      // Invalidate the logs query to refresh the list
+      queryClient.invalidateQueries({ queryKey: ['/api/database-logs'] });
     },
     onError: (error: Error) => {
       toast({
@@ -57,6 +60,8 @@ export default function Dashboard() {
         title: "Error",
         description: error.message,
       });
+      // Invalidate the logs query even on error to show the failure
+      queryClient.invalidateQueries({ queryKey: ['/api/database-logs'] });
     },
   });
 
@@ -185,22 +190,29 @@ export default function Dashboard() {
                 <div className="space-y-4">
                   {logs.map((log) => (
                     <div key={log.id} className="border-b pb-4 last:border-0">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <p className="font-medium">
-                            {log.operationType.charAt(0).toUpperCase() + log.operationType.slice(1)} - {' '}
-                            <span className={log.operationResult === 'success' ? 'text-green-600' : 'text-red-600'}>
-                              {log.operationResult}
-                            </span>
-                          </p>
-                          <p className="text-sm text-muted-foreground">
-                            {format(new Date(log.timestamp), 'PPpp')}
-                          </p>
+                      <div className="flex flex-col space-y-2">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <p className="font-medium">
+                              {log.operationType.charAt(0).toUpperCase() + log.operationType.slice(1)} - {' '}
+                              <span className={log.operationResult === 'success' ? 'text-green-600' : 'text-red-600'}>
+                                {log.operationResult}
+                              </span>
+                            </p>
+                            <p className="text-sm text-muted-foreground">
+                              {format(new Date(log.timestamp), 'PPpp')}
+                            </p>
+                          </div>
                         </div>
-                        {log.details && (
-                          <div className="text-sm text-muted-foreground">
-                            <p>Database: {log.details.name}</p>
-                            <p>Host: {log.details.host}:{log.details.port}</p>
+                        {log.details && typeof log.details === 'object' && (
+                          <div className="text-sm text-muted-foreground bg-slate-50 p-2 rounded">
+                            {log.details.name && <p>Database: {log.details.name}</p>}
+                            {log.details.host && log.details.port && (
+                              <p>Host: {log.details.host}:{log.details.port}</p>
+                            )}
+                            {log.details.error && (
+                              <p className="text-red-500">Error: {log.details.error}</p>
+                            )}
                           </div>
                         )}
                       </div>

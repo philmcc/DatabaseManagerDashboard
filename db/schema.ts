@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, json } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { relations } from "drizzle-orm";
 
@@ -40,7 +40,6 @@ export const databaseTags = pgTable("database_tags", {
   tagId: integer("tag_id").notNull().references(() => tags.id, { onDelete: 'cascade' }),
 });
 
-// Relations
 export const userRelations = relations(users, ({ many }) => ({
   databaseConnections: many(databaseConnections),
   tags: many(tags),
@@ -73,7 +72,27 @@ export const databaseTagsRelations = relations(databaseTags, ({ one }) => ({
   }),
 }));
 
-// Schemas
+export const databaseOperationLogs = pgTable("database_operation_logs", {
+  id: serial("id").primaryKey(),
+  databaseId: integer("database_id").references(() => databaseConnections.id, { onDelete: 'cascade' }),
+  userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  operationType: text("operation_type").notNull(), 
+  operationResult: text("operation_result").notNull(), 
+  details: json("details"), 
+  timestamp: timestamp("timestamp").defaultNow(),
+});
+
+export const databaseOperationLogsRelations = relations(databaseOperationLogs, ({ one }) => ({
+  database: one(databaseConnections, {
+    fields: [databaseOperationLogs.databaseId],
+    references: [databaseConnections.id],
+  }),
+  user: one(users, {
+    fields: [databaseOperationLogs.userId],
+    references: [users.id],
+  }),
+}));
+
 export const insertUserSchema = createInsertSchema(users);
 export const selectUserSchema = createSelectSchema(users);
 
@@ -83,7 +102,9 @@ export const selectTagSchema = createSelectSchema(tags);
 export const insertDatabaseConnectionSchema = createInsertSchema(databaseConnections);
 export const selectDatabaseConnectionSchema = createSelectSchema(databaseConnections);
 
-// Types
+export const insertDatabaseOperationLogSchema = createInsertSchema(databaseOperationLogs);
+export const selectDatabaseOperationLogSchema = createSelectSchema(databaseOperationLogs);
+
 export type InsertUser = typeof users.$inferInsert;
 export type SelectUser = typeof users.$inferSelect;
 
@@ -92,3 +113,6 @@ export type SelectTag = typeof tags.$inferSelect;
 
 export type InsertDatabaseConnection = typeof databaseConnections.$inferInsert;
 export type SelectDatabaseConnection = typeof databaseConnections.$inferSelect;
+
+export type InsertDatabaseOperationLog = typeof databaseOperationLogs.$inferInsert;
+export type SelectDatabaseOperationLog = typeof databaseOperationLogs.$inferSelect;

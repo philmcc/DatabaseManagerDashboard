@@ -3,11 +3,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useUser } from "@/hooks/use-user";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
-import { Settings, LogOut, Database } from "lucide-react";
+import { Settings, LogOut, Database, Activity } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import BaseLayout from "@/components/layout/base-layout";
-import { SelectDatabaseConnection } from "@db/schema";
+import { SelectDatabaseConnection, SelectDatabaseOperationLog } from "@db/schema";
 import { useState } from "react";
+import { format } from "date-fns";
 
 export default function Dashboard() {
   const { user, logout } = useUser();
@@ -17,6 +18,11 @@ export default function Dashboard() {
 
   const { data: databases = [], isLoading } = useQuery<SelectDatabaseConnection[]>({
     queryKey: ['/api/databases'],
+    enabled: !!user,
+  });
+
+  const { data: logs = [], isLoading: isLoadingLogs } = useQuery<SelectDatabaseOperationLog[]>({
+    queryKey: ['/api/database-logs'],
     enabled: !!user,
   });
 
@@ -161,6 +167,50 @@ export default function Dashboard() {
           <Database className="mr-2 h-4 w-4" />
           Add New Database
         </Button>
+
+        <div className="mt-8">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Activity className="h-5 w-5" />
+                Recent Database Operations
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {isLoadingLogs ? (
+                <p className="text-center text-muted-foreground">Loading logs...</p>
+              ) : logs.length === 0 ? (
+                <p className="text-center text-muted-foreground">No operation logs yet.</p>
+              ) : (
+                <div className="space-y-4">
+                  {logs.map((log) => (
+                    <div key={log.id} className="border-b pb-4 last:border-0">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <p className="font-medium">
+                            {log.operationType.charAt(0).toUpperCase() + log.operationType.slice(1)} - {' '}
+                            <span className={log.operationResult === 'success' ? 'text-green-600' : 'text-red-600'}>
+                              {log.operationResult}
+                            </span>
+                          </p>
+                          <p className="text-sm text-muted-foreground">
+                            {format(new Date(log.timestamp), 'PPpp')}
+                          </p>
+                        </div>
+                        {log.details && (
+                          <div className="text-sm text-muted-foreground">
+                            <p>Database: {log.details.name}</p>
+                            <p>Host: {log.details.host}:{log.details.port}</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </BaseLayout>
   );

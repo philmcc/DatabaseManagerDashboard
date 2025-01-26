@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { setupAuth } from "./auth";
 import { db } from "@db";
-import { users, databaseConnections, tags, databaseTags } from "@db/schema";
+import { users, databaseConnections, tags, databaseTags, databaseOperationLogs } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import pkg from 'pg';
 const { Client } = pkg;
@@ -100,7 +100,7 @@ export function registerRoutes(app: Express): Server {
     try {
       const { name, host, port, username, password, databaseName, tags: tagIds } = req.body;
 
-      // First test the connection
+      // Test connection first
       const client = new Client({
         host,
         port,
@@ -113,6 +113,17 @@ export function registerRoutes(app: Express): Server {
         await client.connect();
         await client.end();
       } catch (error: any) {
+        // Log failed connection attempt
+        await db.insert(databaseOperationLogs).values({
+          userId: req.user.id,
+          operationType: 'create',
+          operationResult: 'failure',
+          details: {
+            error: error.message,
+            connectionDetails: { name, host, port, username, databaseName }
+          },
+        });
+
         return res.status(400).json({
           message: "Failed to connect to database",
           error: error.message,
@@ -143,6 +154,20 @@ export function registerRoutes(app: Express): Server {
         );
       }
 
+      // Log successful creation
+      await db.insert(databaseOperationLogs).values({
+        databaseId: newDatabase.id,
+        userId: req.user.id,
+        operationType: 'create',
+        operationResult: 'success',
+        details: {
+          name: newDatabase.name,
+          host: newDatabase.host,
+          port: newDatabase.port,
+          databaseName: newDatabase.databaseName,
+        },
+      });
+
       res.status(201).json(newDatabase);
     } catch (error) {
       console.error("Database creation error:", error);
@@ -159,7 +184,7 @@ export function registerRoutes(app: Express): Server {
       const { id } = req.params;
       const { name, host, port, username, password, databaseName, tags: tagIds } = req.body;
 
-      // First test the connection
+      // Test connection first
       const client = new Client({
         host,
         port,
@@ -172,6 +197,18 @@ export function registerRoutes(app: Express): Server {
         await client.connect();
         await client.end();
       } catch (error: any) {
+        // Log failed update attempt
+        await db.insert(databaseOperationLogs).values({
+          databaseId: parseInt(id),
+          userId: req.user.id,
+          operationType: 'update',
+          operationResult: 'failure',
+          details: {
+            error: error.message,
+            connectionDetails: { name, host, port, username, databaseName }
+          },
+        });
+
         return res.status(400).json({
           message: "Failed to connect to database",
           error: error.message,
@@ -204,12 +241,10 @@ export function registerRoutes(app: Express): Server {
 
       // Update tags if provided
       if (tagIds) {
-        // First remove existing tags
         await db
           .delete(databaseTags)
           .where(eq(databaseTags.databaseId, updatedDatabase.id));
 
-        // Then add new tags
         if (tagIds.length > 0) {
           await db.insert(databaseTags).values(
             tagIds.map((tagId: number) => ({
@@ -219,6 +254,20 @@ export function registerRoutes(app: Express): Server {
           );
         }
       }
+
+      // Log successful update
+      await db.insert(databaseOperationLogs).values({
+        databaseId: updatedDatabase.id,
+        userId: req.user.id,
+        operationType: 'update',
+        operationResult: 'success',
+        details: {
+          name: updatedDatabase.name,
+          host: updatedDatabase.host,
+          port: updatedDatabase.port,
+          databaseName: updatedDatabase.databaseName,
+        },
+      });
 
       res.json(updatedDatabase);
     } catch (error) {
@@ -260,8 +309,40 @@ export function registerRoutes(app: Express): Server {
       try {
         await client.connect();
         await client.end();
+
+        // Log successful test
+        await db.insert(databaseOperationLogs).values({
+          databaseId: parseInt(id),
+          userId: req.user.id,
+          operationType: 'test',
+          operationResult: 'success',
+          details: {
+            name: dbConnection.name,
+            host: dbConnection.host,
+            port: dbConnection.port,
+            databaseName: dbConnection.databaseName,
+          },
+        });
+
         res.json({ success: true, message: "Connection successful" });
       } catch (error: any) {
+        // Log failed test
+        await db.insert(databaseOperationLogs).values({
+          databaseId: parseInt(id),
+          userId: req.user.id,
+          operationType: 'test',
+          operationResult: 'failure',
+          details: {
+            error: error.message,
+            connectionDetails: {
+              name: dbConnection.name,
+              host: dbConnection.host,
+              port: dbConnection.port,
+              databaseName: dbConnection.databaseName,
+            }
+          },
+        });
+
         res.status(400).json({
           success: false,
           message: "Connection failed",
@@ -312,6 +393,29 @@ export function registerRoutes(app: Express): Server {
     } catch (error) {
       console.error("Tag creation error:", error);
       res.status(500).send("Error creating tag");
+    }
+  });
+
+  // Add new endpoint for fetching database operation logs
+  app.get("/api/database-logs", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const logs = await db.query.databaseOperationLogs.findMany({
+        with: {
+          database: true,
+          user: true,
+        },
+        orderBy: (logs, { desc }) => [desc(logs.timestamp)],
+        limit: 100,
+      });
+
+      res.json(logs);
+    } catch (error) {
+      console.error("Database logs fetch error:", error);
+      res.status(500).send("Error fetching database logs");
     }
   });
 

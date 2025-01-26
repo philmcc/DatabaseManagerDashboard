@@ -129,6 +129,7 @@ export function registerRoutes(app: Express): Server {
         user: username,
         password,
         database: databaseName,
+        ssl: { rejectUnauthorized: false } //Added for SSL
       });
 
       try {
@@ -254,6 +255,7 @@ export function registerRoutes(app: Express): Server {
         user: username,
         password,
         database: databaseName,
+        ssl: { rejectUnauthorized: false } //Added for SSL
       });
 
       try {
@@ -386,12 +388,22 @@ export function registerRoutes(app: Express): Server {
         return res.status(404).send("Database connection not found");
       }
 
+      // Get instance details
+      const [instance] = await db
+        .select()
+        .from(instances)
+        .where(eq(instances.id, dbConnection.instanceId))
+        .limit(1);
+
+      if (!instance) {
+        return res.status(404).send("Instance not found");
+      }
+
+      // Construct connection string with SSL mode
+      const connectionString = `postgres://${encodeURIComponent(dbConnection.username)}:${encodeURIComponent(dbConnection.password)}@${instance.hostname}:${instance.port}/${encodeURIComponent(dbConnection.databaseName)}?sslmode=require`;
+
       const client = new Client({
-        host: dbConnection.host,
-        port: dbConnection.port,
-        user: dbConnection.username,
-        password: dbConnection.password,
-        database: dbConnection.databaseName,
+        connectionString,
       });
 
       try {
@@ -406,8 +418,7 @@ export function registerRoutes(app: Express): Server {
           operationResult: 'success',
           details: {
             name: dbConnection.name,
-            host: dbConnection.host,
-            port: dbConnection.port,
+            instanceId: dbConnection.instanceId,
             databaseName: dbConnection.databaseName,
           },
         });
@@ -424,8 +435,7 @@ export function registerRoutes(app: Express): Server {
             error: error.message,
             connectionDetails: {
               name: dbConnection.name,
-              host: dbConnection.host,
-              port: dbConnection.port,
+              instanceId: dbConnection.instanceId,
               databaseName: dbConnection.databaseName,
             }
           },
@@ -434,6 +444,57 @@ export function registerRoutes(app: Express): Server {
         res.status(400).json({
           success: false,
           message: "Connection failed",
+          error: error.message,
+        });
+      }
+    } catch (error) {
+      console.error("Connection test error:", error);
+      res.status(500).send("Error testing connection");
+    }
+  });
+
+  app.post("/api/test-connection", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { instanceId, username, password, databaseName } = req.body;
+
+      // Get instance details
+      const [instance] = await db
+        .select()
+        .from(instances)
+        .where(
+          and(
+            eq(instances.id, instanceId),
+            eq(instances.userId, req.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!instance) {
+        return res.status(404).json({
+          message: "Instance not found",
+        });
+      }
+
+      // Construct the connection string with SSL mode
+      const connectionString = `postgres://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${instance.hostname}:${instance.port}/${encodeURIComponent(databaseName)}?sslmode=require`;
+
+      // Test connection using connection string
+      const client = new Client({
+        connectionString,
+      });
+
+      try {
+        await client.connect();
+        await client.end();
+
+        res.json({ message: "Connection successful" });
+      } catch (error: any) {
+        res.status(400).json({
+          message: "Failed to connect to database",
           error: error.message,
         });
       }
@@ -574,6 +635,7 @@ export function registerRoutes(app: Express): Server {
         user: dbConnection.username,
         password: dbConnection.password,
         database: dbConnection.databaseName,
+        ssl: { rejectUnauthorized: false } //Added for SSL
       });
 
       try {
@@ -843,6 +905,7 @@ export function registerRoutes(app: Express): Server {
         user: username,
         password,
         database: defaultDatabaseName || 'postgres',
+        ssl: { rejectUnauthorized: false } //Added for SSL
       });
 
       try {
@@ -927,6 +990,7 @@ export function registerRoutes(app: Express): Server {
         user: username,
         password,
         database: defaultDatabaseName || 'postgres',
+        ssl: { rejectUnauthorized: false } //Added for SSL
       });
 
       try {
@@ -1013,56 +1077,6 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  app.post("/api/test-connection", async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).send("Not authenticated");
-    }
-
-    try {
-      const { instanceId, username, password, databaseName } = req.body;
-
-      // Get instance details
-      const [instance] = await db
-        .select()
-        .from(instances)
-        .where(
-          and(
-            eq(instances.id, instanceId),
-            eq(instances.userId, req.user.id)
-          )
-        )
-        .limit(1);
-
-      if (!instance) {
-        return res.status(404).json({
-          message: "Instance not found",
-        });
-      }
-
-      // Construct the connection string
-      const connectionString = `postgres://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${instance.hostname}:${instance.port}/${encodeURIComponent(databaseName)}`;
-
-      // Test connection using connection string
-      const client = new Client({
-        connectionString,
-      });
-
-      try {
-        await client.connect();
-        await client.end();
-
-        res.json({ message: "Connection successful" });
-      } catch (error: any) {
-        res.status(400).json({
-          message: "Failed to connect to database",
-          error: error.message,
-        });
-      }
-    } catch (error) {
-      console.error("Connection test error:", error);
-      res.status(500).send("Error testing connection");
-    }
-  });
 
   const httpServer = createServer(app);
   return httpServer;

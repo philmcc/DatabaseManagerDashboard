@@ -24,7 +24,7 @@ function Router() {
 
   return (
     <Switch>
-      <Route path="/" component={Home} />
+      <Route path="/" component={user ? Dashboard : Home} />
       <Route path="/auth" component={AuthPage} />
       <Route path="/reset-password" component={ResetPassword} />
       <Route path="/profile-settings">

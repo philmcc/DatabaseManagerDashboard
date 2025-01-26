@@ -1,8 +1,8 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useLocation } from "wouter";
+import { useLocation, useParams } from "wouter";
 import { z } from "zod";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import {
   Form,
@@ -16,6 +16,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { Loader2 } from "lucide-react";
+import type { SelectCluster } from "@db/schema";
+import React from "react";
 
 const clusterSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -26,27 +29,47 @@ type ClusterFormValues = z.infer<typeof clusterSchema>;
 
 export default function ClusterForm() {
   const [_, navigate] = useLocation();
+  const params = useParams<{ id: string }>();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const isEditing = !!params.id;
+
+  const { data: existingCluster, isLoading: isLoadingCluster } = useQuery<SelectCluster>({
+    queryKey: [`/api/clusters/${params.id}`],
+    enabled: isEditing,
+  });
 
   const form = useForm<ClusterFormValues>({
     resolver: zodResolver(clusterSchema),
     defaultValues: {
-      name: "",
-      description: "",
+      name: existingCluster?.name || "",
+      description: existingCluster?.description || "",
     },
   });
 
-  const createCluster = useMutation({
-    mutationFn: async (values: ClusterFormValues) => {
-      const response = await fetch("/api/clusters", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(values),
-        credentials: "include",
+  // Update form values when existing cluster data is loaded
+  React.useEffect(() => {
+    if (existingCluster) {
+      form.reset({
+        name: existingCluster.name,
+        description: existingCluster.description || "",
       });
+    }
+  }, [existingCluster, form]);
+
+  const mutation = useMutation({
+    mutationFn: async (values: ClusterFormValues) => {
+      const response = await fetch(
+        isEditing ? `/api/clusters/${params.id}` : "/api/clusters",
+        {
+          method: isEditing ? "PATCH" : "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(values),
+          credentials: "include",
+        }
+      );
 
       if (!response.ok) {
         throw new Error(await response.text());
@@ -56,9 +79,12 @@ export default function ClusterForm() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/clusters"] });
+      if (isEditing) {
+        queryClient.invalidateQueries({ queryKey: [`/api/clusters/${params.id}`] });
+      }
       toast({
         title: "Success",
-        description: "Cluster created successfully",
+        description: `Cluster ${isEditing ? "updated" : "created"} successfully`,
       });
       navigate("/clusters");
     },
@@ -71,14 +97,24 @@ export default function ClusterForm() {
     },
   });
 
+  if (isEditing && isLoadingCluster) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-border" />
+      </div>
+    );
+  }
+
   const onSubmit = (data: ClusterFormValues) => {
-    createCluster.mutate(data);
+    mutation.mutate(data);
   };
 
   return (
     <div className="container mx-auto py-6">
       <div className="max-w-2xl mx-auto">
-        <h1 className="text-3xl font-bold mb-6">Create New Cluster</h1>
+        <h1 className="text-3xl font-bold mb-6">
+          {isEditing ? "Edit Cluster" : "Create New Cluster"}
+        </h1>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
             <FormField
@@ -126,7 +162,9 @@ export default function ClusterForm() {
               >
                 Cancel
               </Button>
-              <Button type="submit">Create Cluster</Button>
+              <Button type="submit">
+                {isEditing ? "Update Cluster" : "Create Cluster"}
+              </Button>
             </div>
           </form>
         </Form>

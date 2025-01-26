@@ -64,6 +64,9 @@ function Router() {
       <Route path="/clusters/:id">
         {user ? <ClusterDetails /> : <Home />}
       </Route>
+      <Route path="/clusters/:id/edit">
+        {user ? <ClusterForm /> : <Home />}
+      </Route>
       <Route component={NotFound} />
     </Switch>
   );

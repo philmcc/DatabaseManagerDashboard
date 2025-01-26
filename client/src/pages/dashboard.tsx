@@ -3,18 +3,48 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useUser } from "@/hooks/use-user";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
-import { Settings, LogOut, Database, Check, X } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { Settings, LogOut, Database } from "lucide-react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import BaseLayout from "@/components/layout/base-layout";
+import { SelectDatabaseConnection } from "@db/schema";
 
 export default function Dashboard() {
   const { user, logout } = useUser();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
-  const { data: databases, isLoading } = useQuery({
+  const { data: databases = [], isLoading } = useQuery<SelectDatabaseConnection[]>({
     queryKey: ['/api/databases'],
     enabled: !!user,
+  });
+
+  const { mutate: testConnection, isPending: isTestingConnection } = useMutation({
+    mutationFn: async (databaseId: number) => {
+      const res = await fetch(`/api/databases/${databaseId}/test`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+
+      if (!res.ok) {
+        const error = await res.text();
+        throw new Error(error);
+      }
+
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({
+        title: "Success",
+        description: data.message,
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message,
+      });
+    },
   });
 
   const handleLogout = async () => {
@@ -65,8 +95,14 @@ export default function Dashboard() {
 
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {isLoading ? (
-            <p>Loading databases...</p>
-          ) : databases?.length === 0 ? (
+            <Card>
+              <CardContent className="pt-6">
+                <p className="text-center text-muted-foreground">
+                  Loading databases...
+                </p>
+              </CardContent>
+            </Card>
+          ) : databases.length === 0 ? (
             <Card>
               <CardContent className="pt-6">
                 <p className="text-center text-muted-foreground">
@@ -75,7 +111,7 @@ export default function Dashboard() {
               </CardContent>
             </Card>
           ) : (
-            databases?.map((db) => (
+            databases.map((db) => (
               <Card key={db.id}>
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                   <CardTitle className="text-sm font-medium">
@@ -99,11 +135,10 @@ export default function Dashboard() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => {
-                        // TODO: Implement connection test
-                      }}
+                      disabled={isTestingConnection}
+                      onClick={() => testConnection(db.id)}
                     >
-                      Test Connection
+                      {isTestingConnection ? "Testing..." : "Test Connection"}
                     </Button>
                   </div>
                 </CardContent>

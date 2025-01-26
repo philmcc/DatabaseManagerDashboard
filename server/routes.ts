@@ -54,6 +54,7 @@ export function registerRoutes(app: Express): Server {
               tag: true,
             },
           },
+          instance: true, // Include instance details
         },
       });
 
@@ -82,6 +83,7 @@ export function registerRoutes(app: Express): Server {
               tag: true,
             },
           },
+          instance: true, // Include instance details
         },
       });
 
@@ -663,6 +665,7 @@ export function registerRoutes(app: Express): Server {
       res.status(500).send("Error fetching instance");
     }
   });
+
 
 
   // Tags Management Endpoints

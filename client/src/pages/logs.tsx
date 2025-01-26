@@ -29,8 +29,8 @@ interface DatabaseLog extends SelectDatabaseOperationLog {
 
 export default function LogsPage() {
   const [page, setPage] = useState(1);
-  const [selectedDatabase, setSelectedDatabase] = useState<string>("");
-  const [selectedTag, setSelectedTag] = useState<string>("");
+  const [selectedDatabase, setSelectedDatabase] = useState<string>("all");
+  const [selectedTag, setSelectedTag] = useState<string>("all");
   const pageSize = 20;
 
   // Fetch databases for filter
@@ -48,8 +48,8 @@ export default function LogsPage() {
     const params = new URLSearchParams();
     params.append('page', page.toString());
     params.append('pageSize', pageSize.toString());
-    if (selectedDatabase) params.append('databaseId', selectedDatabase);
-    if (selectedTag) params.append('tagId', selectedTag);
+    if (selectedDatabase !== "all") params.append('databaseId', selectedDatabase);
+    if (selectedTag !== "all") params.append('tagId', selectedTag);
     return params.toString();
   };
 
@@ -82,7 +82,7 @@ export default function LogsPage() {
                   <SelectValue placeholder="Filter by Database" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">All Databases</SelectItem>
+                  <SelectItem value="all">All Databases</SelectItem>
                   {databases?.map((db) => (
                     <SelectItem key={db.id} value={db.id.toString()}>
                       {db.name}
@@ -103,7 +103,7 @@ export default function LogsPage() {
                   <SelectValue placeholder="Filter by Tag" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">All Tags</SelectItem>
+                  <SelectItem value="all">All Tags</SelectItem>
                   {tags?.map((tag) => (
                     <SelectItem key={tag.id} value={tag.id.toString()}>
                       {tag.name}

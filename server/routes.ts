@@ -807,6 +807,24 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
+  // Add instance list endpoint
+  app.get("/api/instances", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const userInstances = await db
+        .select()
+        .from(instances)
+        .where(eq(instances.userId, req.user.id));
+
+      res.json(userInstances);
+    } catch (error) {
+      console.error("Instances fetch error:", error);
+      res.status(500).send("Error fetching instances");
+    }
+  });
 
   // Add instance creation route
   app.post("/api/clusters/:clusterId/instances", async (req, res) => {

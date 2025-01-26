@@ -60,7 +60,8 @@ export default function DatabaseForm() {
         username: existingDatabase.username,
         password: existingDatabase.password,
         databaseName: existingDatabase.databaseName,
-        tags: existingDatabase.tags?.map(t => t.tagId) || [],
+        // Map through the tags array and extract the tagIds
+        tags: existingDatabase.tags?.map(t => t.tag.id) || [],
       });
     }
   }, [existingDatabase, form]);
@@ -310,7 +311,7 @@ export default function DatabaseForm() {
                     Cancel
                   </Button>
                   <Button type="submit" disabled={isCreating || isUpdating}>
-                    {isEditMode 
+                    {isEditMode
                       ? (isUpdating ? "Updating..." : "Update Database")
                       : (isCreating ? "Adding..." : "Add Database")
                     }

@@ -71,16 +71,19 @@ export function registerRoutes(app: Express): Server {
 
     try {
       const { id } = req.params;
-      const [database] = await db
-        .select()
-        .from(databaseConnections)
-        .where(
-          and(
-            eq(databaseConnections.id, parseInt(id)),
-            eq(databaseConnections.userId, req.user.id)
-          )
-        )
-        .limit(1);
+      const database = await db.query.databaseConnections.findFirst({
+        where: and(
+          eq(databaseConnections.id, parseInt(id)),
+          eq(databaseConnections.userId, req.user.id)
+        ),
+        with: {
+          tags: {
+            with: {
+              tag: true,
+            },
+          },
+        },
+      });
 
       if (!database) {
         return res.status(404).send("Database not found");
@@ -296,7 +299,7 @@ export function registerRoutes(app: Express): Server {
 
       // Get tag names for logging
       const allTags = await db.select().from(tags);
-      const getTagNames = (ids: number[]) => 
+      const getTagNames = (ids: number[]) =>
         ids.map(id => allTags.find(t => t.id === id)?.name || `Unknown (${id})`);
 
       // Log successful update with before/after values including tags

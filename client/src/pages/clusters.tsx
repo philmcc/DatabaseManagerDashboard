@@ -9,13 +9,14 @@ import type { SelectCluster } from "@db/schema";
 function ClustersPage() {
   const [location, navigate] = useLocation();
   const { data: clusters, isLoading } = useQuery({
-    queryKey: ['clusters'],
-    queryFn: async () => {
-      const response = await fetch('/api/clusters');
+    queryKey: ['/api/clusters'],
+    queryFn: async ({ queryKey }) => {
+      const response = await fetch(queryKey[0]);
       if (!response.ok) {
         throw new Error('Failed to fetch clusters');
       }
-      return response.json();
+      const data: SelectCluster[] = await response.json();
+      return data;
     }
   });
 
@@ -40,7 +41,7 @@ function ClustersPage() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {clusters?.map((cluster) => (
+        {clusters?.map((cluster: SelectCluster) => (
           <Card key={cluster.id} className="hover:bg-accent/50 transition-colors">
             <CardHeader className="cursor-pointer" onClick={() => navigate(`/clusters/${cluster.id}`)}>
               <CardTitle className="flex justify-between items-center">

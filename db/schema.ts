@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, integer, json, decimal, boolean, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, boolean, primaryKey, jsonb, numeric, json } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { relations } from "drizzle-orm";
 
@@ -45,7 +45,7 @@ export const databaseConnections = pgTable("database_connections", {
   username: text("username").notNull(),
   password: text("password").notNull(),
   databaseName: text("database_name").notNull(),
-  instanceId: integer("instance_id").references(() => instances.id, { onDelete: 'cascade' }), 
+  instanceId: integer("instance_id").references(() => instances.id, { onDelete: 'cascade' }),
   userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
   createdAt: timestamp("createdAt").defaultNow(),
   updatedAt: timestamp("updatedAt").defaultNow(),
@@ -79,6 +79,30 @@ export const instanceTags = pgTable("instance_tags", {
 }, (table) => ({
   pk: primaryKey({ columns: [table.instanceId, table.tagId] }),
 }));
+
+// Add new tables for operation logs and metrics
+export const databaseOperationLogs = pgTable("database_operation_logs", {
+  id: serial("id").primaryKey(),
+  databaseId: integer("database_id").references(() => databaseConnections.id, { onDelete: 'cascade' }),
+  userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  operationType: text("operation_type").notNull(),
+  operationResult: text("operation_result").notNull(),
+  details: jsonb("details").notNull(),
+  timestamp: timestamp("timestamp").defaultNow(),
+});
+
+export const databaseMetrics = pgTable("database_metrics", {
+  id: serial("id").primaryKey(),
+  databaseId: integer("database_id").notNull().references(() => databaseConnections.id, { onDelete: 'cascade' }),
+  timestamp: timestamp("timestamp").defaultNow(),
+  activeConnections: integer("active_connections").notNull(),
+  databaseSize: numeric("database_size").notNull(),
+  slowQueries: integer("slow_queries").notNull(),
+  avgQueryTime: numeric("avg_query_time").notNull(),
+  cacheHitRatio: numeric("cache_hit_ratio").notNull(),
+  metrics: json("metrics").notNull(),
+});
+
 
 // Relations
 export const userRelations = relations(users, ({ many }) => ({
@@ -130,6 +154,25 @@ export const tagsRelations = relations(tags, ({ one, many }) => ({
   databases: many(databaseTags),
   clusters: many(clusterTags),
   instances: many(instanceTags),
+}));
+
+// Add relations for the new tables
+export const databaseOperationLogsRelations = relations(databaseOperationLogs, ({ one }) => ({
+  database: one(databaseConnections, {
+    fields: [databaseOperationLogs.databaseId],
+    references: [databaseConnections.id],
+  }),
+  user: one(users, {
+    fields: [databaseOperationLogs.userId],
+    references: [users.id],
+  }),
+}));
+
+export const databaseMetricsRelations = relations(databaseMetrics, ({ one }) => ({
+  database: one(databaseConnections, {
+    fields: [databaseMetrics.databaseId],
+    references: [databaseConnections.id],
+  }),
 }));
 
 // Schema validation

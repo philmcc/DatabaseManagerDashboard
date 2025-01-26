@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useUser } from "@/hooks/use-user";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
+import { Link } from "wouter";
 import { Settings, LogOut, Database, Activity } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import BaseLayout from "@/components/layout/base-layout";
@@ -75,7 +76,6 @@ export default function Dashboard() {
         title: "Success",
         description: data.message,
       });
-      // Invalidate the logs query to refresh the list
       queryClient.invalidateQueries({ queryKey: ['/api/database-logs'] });
     },
     onError: (error: Error) => {
@@ -84,7 +84,6 @@ export default function Dashboard() {
         title: "Error",
         description: error.message,
       });
-      // Invalidate the logs query even on error to show the failure
       queryClient.invalidateQueries({ queryKey: ['/api/database-logs'] });
     },
   });
@@ -154,37 +153,45 @@ export default function Dashboard() {
             </Card>
           ) : (
             databases.map((db) => (
-              <Card key={db.id}>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">
-                    {db.name}
-                  </CardTitle>
-                  <Database className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-xs text-muted-foreground">
-                    <p>{db.databaseName} @ {db.host}:{db.port}</p>
-                    <p>Username: {db.username}</p>
-                  </div>
-                  <div className="mt-2 space-x-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setLocation(`/databases/${db.id}/edit`)}
-                    >
-                      Edit
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={testingDatabaseId === db.id}
-                      onClick={() => testConnection(db.id)}
-                    >
-                      {testingDatabaseId === db.id ? "Testing..." : "Test Connection"}
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
+              <Link key={db.id} href={`/databases/${db.id}`}>
+                <Card className="cursor-pointer hover:bg-accent/5 transition-colors">
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <CardTitle className="text-sm font-medium">
+                      {db.name}
+                    </CardTitle>
+                    <Database className="h-4 w-4 text-muted-foreground" />
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-xs text-muted-foreground">
+                      <p>{db.databaseName} @ {db.host}:{db.port}</p>
+                      <p>Username: {db.username}</p>
+                    </div>
+                    <div className="mt-2 space-x-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setLocation(`/databases/${db.id}/edit`);
+                        }}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={testingDatabaseId === db.id}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          testConnection(db.id);
+                        }}
+                      >
+                        {testingDatabaseId === db.id ? "Testing..." : "Test Connection"}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              </Link>
             ))
           )}
         </div>

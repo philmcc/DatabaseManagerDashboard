@@ -9,6 +9,7 @@ import AuthPage from "@/pages/auth-page";
 import ResetPassword from "@/pages/reset-password";
 import ProfileSettings from "@/pages/profile-settings";
 import DatabaseForm from "@/pages/database-form";
+import DatabaseDetails from "@/pages/database-details";
 import LogsPage from "@/pages/logs";
 import TagsPage from "@/pages/tags";
 import { useUser } from "@/hooks/use-user";
@@ -44,6 +45,9 @@ function Router() {
       </Route>
       <Route path="/databases/new">
         {user ? <DatabaseForm /> : <Home />}
+      </Route>
+      <Route path="/databases/:id">
+        {user ? <DatabaseDetails /> : <Home />}
       </Route>
       <Route path="/databases/:id/edit">
         {user ? <DatabaseForm /> : <Home />}

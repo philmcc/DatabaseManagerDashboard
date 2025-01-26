@@ -2,8 +2,8 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { setupAuth } from "./auth";
 import { db } from "@db";
-import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics } from "@db/schema";
-import { eq, and } from "drizzle-orm";
+import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics, clusters, instances } from "@db/schema";
+import { eq, and, ne } from "drizzle-orm";
 import pkg from 'pg';
 const { Client } = pkg;
 import { sql } from 'drizzle-orm';
@@ -54,10 +54,22 @@ export function registerRoutes(app: Express): Server {
               tag: true,
             },
           },
+          instance: true,
         },
       });
 
-      res.json(userDatabases);
+      // Transform response to include formatted instance details
+      const formattedDatabases = userDatabases.map(db => ({
+        ...db,
+        instanceDetails: db.instance ? {
+          id: db.instance.id,
+          hostname: db.instance.hostname,
+          port: db.instance.port,
+          description: db.instance.description,
+        } : null
+      }));
+
+      res.json(formattedDatabases);
     } catch (error) {
       console.error("Database fetch error:", error);
       res.status(500).send("Error fetching databases");
@@ -82,6 +94,7 @@ export function registerRoutes(app: Express): Server {
               tag: true,
             },
           },
+          instance: true,
         },
       });
 
@@ -89,7 +102,18 @@ export function registerRoutes(app: Express): Server {
         return res.status(404).send("Database not found");
       }
 
-      res.json(database);
+      // Transform response to include formatted instance details
+      const formattedDatabase = {
+        ...database,
+        instanceDetails: database.instance ? {
+          id: database.instance.id,
+          hostname: database.instance.hostname,
+          port: database.instance.port,
+          description: database.instance.description,
+        } : null
+      };
+
+      res.json(formattedDatabase);
     } catch (error) {
       console.error("Database fetch error:", error);
       res.status(500).send("Error fetching database");
@@ -102,15 +126,34 @@ export function registerRoutes(app: Express): Server {
     }
 
     try {
-      const { name, host, port, username, password, databaseName, tags: tagIds } = req.body;
+      const { name, instanceId, username, password, databaseName, tags: tagIds } = req.body;
 
-      // Test connection first
+      // Get instance details
+      const [instance] = await db
+        .select()
+        .from(instances)
+        .where(
+          and(
+            eq(instances.id, instanceId),
+            eq(instances.userId, req.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!instance) {
+        return res.status(404).json({
+          message: "Instance not found",
+        });
+      }
+
+      // Test connection first using instance details
       const client = new Client({
-        host,
-        port,
+        host: instance.hostname,
+        port: instance.port,
         user: username,
         password,
         database: databaseName,
+        ssl: { rejectUnauthorized: false }
       });
 
       try {
@@ -124,7 +167,7 @@ export function registerRoutes(app: Express): Server {
           operationResult: 'failure',
           details: {
             error: error.message,
-            connectionDetails: { name, host, port, username, databaseName }
+            connectionDetails: { name, instanceId, username, databaseName }
           },
         });
 
@@ -139,8 +182,7 @@ export function registerRoutes(app: Express): Server {
         .insert(databaseConnections)
         .values({
           name,
-          host,
-          port,
+          instanceId,
           username,
           password,
           databaseName,
@@ -166,8 +208,7 @@ export function registerRoutes(app: Express): Server {
         operationResult: 'success',
         details: {
           name: newDatabase.name,
-          host: newDatabase.host,
-          port: newDatabase.port,
+          instanceId: newDatabase.instanceId,
           databaseName: newDatabase.databaseName,
         },
       });
@@ -186,7 +227,7 @@ export function registerRoutes(app: Express): Server {
 
     try {
       const { id } = req.params;
-      const { name, host, port, username, password, databaseName, tags: tagIds } = req.body;
+      const { name, instanceId, username, password, databaseName, tags: tagIds } = req.body;
 
       // Get existing database details before update
       const [existingDatabase] = await db
@@ -204,6 +245,24 @@ export function registerRoutes(app: Express): Server {
         return res.status(404).send("Database not found");
       }
 
+      // Get instance details
+      const [instance] = await db
+        .select()
+        .from(instances)
+        .where(
+          and(
+            eq(instances.id, instanceId),
+            eq(instances.userId, req.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!instance) {
+        return res.status(404).json({
+          message: "Instance not found",
+        });
+      }
+
       // Get existing tags
       const existingTags = await db
         .select()
@@ -213,13 +272,14 @@ export function registerRoutes(app: Express): Server {
       const existingTagIds = existingTags.map(t => t.tagId);
       const newTagIds = tagIds || [];
 
-      // Test connection first
+      // Test connection first using instance details
       const client = new Client({
-        host,
-        port,
+        host: instance.hostname,
+        port: instance.port,
         user: username,
         password,
         database: databaseName,
+        ssl: { rejectUnauthorized: false }
       });
 
       try {
@@ -236,16 +296,14 @@ export function registerRoutes(app: Express): Server {
             error: error.message,
             before: {
               name: existingDatabase.name,
-              host: existingDatabase.host,
-              port: existingDatabase.port,
+              instanceId: existingDatabase.instanceId,
               username: existingDatabase.username,
               databaseName: existingDatabase.databaseName,
               tags: existingTagIds
             },
             attempted: {
               name,
-              host,
-              port,
+              instanceId,
               username,
               databaseName,
               tags: newTagIds
@@ -264,8 +322,7 @@ export function registerRoutes(app: Express): Server {
         .update(databaseConnections)
         .set({
           name,
-          host,
-          port,
+          instanceId,
           username,
           password,
           databaseName,
@@ -311,16 +368,14 @@ export function registerRoutes(app: Express): Server {
         details: {
           before: {
             name: existingDatabase.name,
-            host: existingDatabase.host,
-            port: existingDatabase.port,
+            instanceId: existingDatabase.instanceId,
             username: existingDatabase.username,
             databaseName: existingDatabase.databaseName,
             tags: getTagNames(existingTagIds)
           },
           after: {
             name: updatedDatabase.name,
-            host: updatedDatabase.host,
-            port: updatedDatabase.port,
+            instanceId: updatedDatabase.instanceId,
             username: updatedDatabase.username,
             databaseName: updatedDatabase.databaseName,
             tags: getTagNames(newTagIds)
@@ -328,13 +383,7 @@ export function registerRoutes(app: Express): Server {
         },
       });
 
-      // Return updated database with tags
-      const databaseWithTags = {
-        ...updatedDatabase,
-        tags: tagIds.map((tagId: number) => ({ tagId }))
-      };
-
-      res.json(databaseWithTags);
+      res.json(updatedDatabase);
     } catch (error) {
       console.error("Database update error:", error);
       res.status(500).send("Error updating database connection");
@@ -363,12 +412,25 @@ export function registerRoutes(app: Express): Server {
         return res.status(404).send("Database connection not found");
       }
 
+      // Get instance details
+      const [instance] = await db
+        .select()
+        .from(instances)
+        .where(eq(instances.id, dbConnection.instanceId))
+        .limit(1);
+
+      if (!instance) {
+        return res.status(404).send("Instance not found");
+      }
+
+      // Test connection using direct configuration
       const client = new Client({
-        host: dbConnection.host,
-        port: dbConnection.port,
+        host: instance.hostname,
+        port: instance.port,
         user: dbConnection.username,
         password: dbConnection.password,
         database: dbConnection.databaseName,
+        ssl: { rejectUnauthorized: false }
       });
 
       try {
@@ -383,8 +445,7 @@ export function registerRoutes(app: Express): Server {
           operationResult: 'success',
           details: {
             name: dbConnection.name,
-            host: dbConnection.host,
-            port: dbConnection.port,
+            instanceId: dbConnection.instanceId,
             databaseName: dbConnection.databaseName,
           },
         });
@@ -401,8 +462,7 @@ export function registerRoutes(app: Express): Server {
             error: error.message,
             connectionDetails: {
               name: dbConnection.name,
-              host: dbConnection.host,
-              port: dbConnection.port,
+              instanceId: dbConnection.instanceId,
               databaseName: dbConnection.databaseName,
             }
           },
@@ -419,6 +479,215 @@ export function registerRoutes(app: Express): Server {
       res.status(500).send("Error testing connection");
     }
   });
+
+  // Add instance list endpoint
+  app.get("/api/instances", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const userInstances = await db
+        .select()
+        .from(instances)
+        .where(eq(instances.userId, req.user.id));
+
+      res.json(userInstances);
+    } catch (error) {
+      console.error("Instances fetch error:", error);
+      res.status(500).send("Error fetching instances");
+    }
+  });
+
+  // Add instance creation route
+  app.post("/api/clusters/:clusterId/instances", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { clusterId } = req.params;
+      const { hostname, port, username, password, description, isWriter, defaultDatabaseName } = req.body;
+
+      // Test connection first
+      const client = new Client({
+        host: hostname,
+        port,
+        user: username,
+        password,
+        database: defaultDatabaseName || 'postgres',
+        ssl: { rejectUnauthorized: false }
+      });
+
+      try {
+        await client.connect();
+        await client.end();
+      } catch (error: any) {
+        return res.status(400).json({
+          message: "Failed to connect to database instance",
+          error: error.message,
+        });
+      }
+
+      // If connection test passed, create the instance
+      const [newInstance] = await db
+        .insert(instances)
+        .values({
+          hostname,
+          port,
+          username,
+          password,
+          description,
+          isWriter,
+          defaultDatabaseName,
+          clusterId: parseInt(clusterId),
+          userId: req.user.id,
+        })
+        .returning();
+
+      // If this is a writer instance, update other instances in the cluster to be readers
+      if (isWriter) {
+        await db
+          .update(instances)
+          .set({ isWriter: false })
+          .where(
+            and(
+              eq(instances.clusterId, parseInt(clusterId)),
+              ne(instances.id, newInstance.id)
+            )
+          );
+      }
+
+      res.json(newInstance);
+    } catch (error) {
+      console.error("Instance creation error:", error);
+      res.status(500).json({
+        message: "Error creating instance",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // Add instance update endpoint
+  app.patch("/api/instances/:id", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { id } = req.params;
+      const { hostname, port, username, password, description, isWriter, defaultDatabaseName } = req.body;
+
+      // Get existing instance
+      const [existingInstance] = await db
+        .select()
+        .from(instances)
+        .where(
+          and(
+            eq(instances.id, parseInt(id)),
+            eq(instances.userId, req.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!existingInstance) {
+        return res.status(404).send("Instance not found");
+      }
+
+      // Test connection first
+      const client = new Client({
+        host: hostname,
+        port,
+        user: username,
+        password,
+        database: defaultDatabaseName || 'postgres',
+        ssl: { rejectUnauthorized: false }
+      });
+
+      try {
+        await client.connect();
+        await client.end();
+      } catch (error: any) {
+        return res.status(400).json({
+          message: "Failed to connect to database instance",
+          error: error.message,
+        });
+      }
+
+      // Update the instance
+      const [updatedInstance] = await db
+        .update(instances)
+        .set({
+          hostname,
+          port,
+          username,
+          password,
+          description,
+          isWriter,
+          defaultDatabaseName,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(instances.id, parseInt(id)),
+            eq(instances.userId, req.user.id)
+          )
+        )
+        .returning();
+
+      // If this instance is set as writer, update other instances in the cluster to be readers
+      if (isWriter) {
+        await db
+          .update(instances)
+          .set({ isWriter: false })
+          .where(
+            and(
+              eq(instances.clusterId, updatedInstance.clusterId),
+              ne(instances.id, updatedInstance.id)
+            )
+          );
+      }
+
+      res.json(updatedInstance);
+    } catch (error) {
+      console.error("Instance update error:", error);
+      res.status(500).json({
+        message: "Error updating instance",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // Add instance fetch endpoint
+  app.get("/api/instances/:id", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { id } = req.params;
+      const instance = await db.query.instances.findFirst({
+        where: and(
+          eq(instances.id, parseInt(id)),
+          eq(instances.userId, req.user.id)
+        ),
+        with: {
+          cluster: true,
+          databases: true,
+        },
+      });
+
+      if (!instance) {
+        return res.status(404).send("Instance not found");
+      }
+
+      res.json(instance);
+    } catch (error) {
+      console.error("Instance fetch error:", error);
+      res.status(500).send("Error fetching instance");
+    }
+  });
+
 
   // Tags Management Endpoints
   app.get("/api/tags", async (req, res) => {
@@ -528,10 +797,14 @@ export function registerRoutes(app: Express): Server {
       const { id } = req.params;
       const timeRange = req.query.timeRange || '1h'; // Default to last hour
 
-      // Get database connection details
+      // Get database connection details with instance
       const [dbConnection] = await db
-        .select()
+        .select({
+          database: databaseConnections,
+          instance: instances,
+        })
         .from(databaseConnections)
+        .leftJoin(instances, eq(instances.id, databaseConnections.instanceId))
         .where(
           and(
             eq(databaseConnections.id, parseInt(id)),
@@ -544,13 +817,18 @@ export function registerRoutes(app: Express): Server {
         return res.status(404).send("Database connection not found");
       }
 
+      if (!dbConnection.instance) {
+        return res.status(404).send("Instance not found");
+      }
+
       // Connect to the database to collect metrics
       const client = new Client({
-        host: dbConnection.host,
-        port: dbConnection.port,
-        user: dbConnection.username,
-        password: dbConnection.password,
-        database: dbConnection.databaseName,
+        host: dbConnection.instance.hostname,
+        port: dbConnection.instance.port,
+        user: dbConnection.database.username,
+        password: dbConnection.database.password,
+        database: dbConnection.database.databaseName,
+        ssl: { rejectUnauthorized: false }
       });
 
       try {
@@ -667,6 +945,122 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  const httpServer = createServer(app);
-  return httpServer;
+  // Clusters Management Endpoints
+  // Modified clusters fetch endpoint
+  app.get("/api/clusters", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const userClusters = await db
+        .select()
+        .from(clusters)
+        .where(eq(clusters.userId, req.user.id));
+
+      res.json(userClusters);
+    } catch (error) {
+      console.error("Clusters fetch error:", error);
+      res.status(500).send("Error fetching clusters");
+    }
+  });
+
+  app.post("/api/clusters", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { name, description } = req.body;
+      const [newCluster] = await db
+        .insert(clusters)
+        .values({
+          name,
+          description,
+          userId: req.user.id,
+        })
+        .returning();
+
+      res.status(201).json(newCluster);
+    } catch (error) {
+      console.error("Cluster creation error:", error);
+      res.status(500).send("Error creating cluster");
+    }
+  });
+
+  // Modified cluster details endpoint
+  app.get("/api/clusters/:id", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { id } = req.params;
+      const cluster = await db
+        .select()
+        .from(clusters)
+        .where(
+          and(
+            eq(clusters.id, parseInt(id)),
+            eq(clusters.userId, req.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!cluster.length) {
+        return res.status(404).send("Cluster not found");
+      }
+
+      // Fetch instances separately
+      const clusterInstances = await db
+        .select()
+        .from(instances)
+        .where(eq(instances.clusterId, parseInt(id)));
+
+      res.json({
+        ...cluster[0],
+        instances: clusterInstances
+      });
+    } catch (error) {
+      console.error("Cluster fetch error:", error);
+      res.status(500).send("Error fetching cluster");
+    }
+  });
+
+  app.patch("/api/clusters/:id", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { id } = req.params;
+      const { name, description } = req.body;
+
+      const [updatedCluster] = await db
+        .update(clusters)
+        .set({
+          name,
+          description,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(clusters.id, parseInt(id)),
+            eq(clusters.userId, req.user.id)
+          )
+        )
+        .returning();
+
+      if (!updatedCluster) {
+        return res.status(404).send("Cluster not found");
+      }
+
+      res.json(updatedCluster);
+    } catch (error) {
+      console.error("Cluster update error:", error);
+      res.status(500).send("Error updating cluster");
+    }
+  });
+
+  const httpServer = createServer(app);  return httpServer;
 }

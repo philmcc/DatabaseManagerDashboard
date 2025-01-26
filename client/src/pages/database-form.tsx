@@ -4,20 +4,19 @@ import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation, useParams } from "wouter";
 import BaseLayout from "@/components/layout/base-layout";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Database } from "lucide-react";
-import { SelectDatabaseConnection, SelectTag } from "@db/schema";
-import { useEffect } from "react";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SelectDatabaseConnection, SelectInstance, SelectTag } from "@db/schema";
+import { useEffect, useState } from "react";
 
 const formSchema = z.object({
   name: z.string().min(1, "Name is required"),
-  host: z.string().min(1, "Host is required"),
-  port: z.coerce.number().min(1, "Port is required"),
+  instanceId: z.coerce.number().min(1, "Instance is required"),
   username: z.string().min(1, "Username is required"),
   password: z.string().min(1, "Password is required"),
   databaseName: z.string().min(1, "Database name is required"),
@@ -32,10 +31,15 @@ export default function DatabaseForm() {
   const queryClient = useQueryClient();
   const params = useParams();
   const isEditMode = params.id != null;
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
 
   const { data: existingDatabase, isLoading: isLoadingDatabase } = useQuery<SelectDatabaseConnection>({
     queryKey: [`/api/databases/${params.id}`],
     enabled: isEditMode,
+  });
+
+  const { data: instances = [] } = useQuery<SelectInstance[]>({
+    queryKey: ['/api/instances'],
   });
 
   const { data: tags = [] } = useQuery<SelectTag[]>({
@@ -45,7 +49,6 @@ export default function DatabaseForm() {
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      port: 5432, // Default PostgreSQL port
       tags: [],
     },
   });
@@ -55,16 +58,51 @@ export default function DatabaseForm() {
     if (existingDatabase) {
       form.reset({
         name: existingDatabase.name,
-        host: existingDatabase.host,
-        port: existingDatabase.port,
+        instanceId: existingDatabase.instanceId || undefined,
         username: existingDatabase.username,
         password: existingDatabase.password,
         databaseName: existingDatabase.databaseName,
-        // Map through the tags array and extract the tagIds
-        tags: existingDatabase.tags?.map(t => t.tag.id) || [],
+        tags: existingDatabase.tags?.map(t => t.tagId) || [],
       });
     }
   }, [existingDatabase, form]);
+
+  // Test connection mutation
+  const { mutate: testConnection } = useMutation({
+    mutationFn: async (values: FormData) => {
+      setIsTestingConnection(true);
+      try {
+        const res = await fetch("/api/test-connection", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(values),
+          credentials: "include",
+        });
+
+        if (!res.ok) {
+          const error = await res.text();
+          throw new Error(error);
+        }
+
+        return res.json();
+      } finally {
+        setIsTestingConnection(false);
+      }
+    },
+    onSuccess: () => {
+      toast({
+        title: "Success",
+        description: "Connection test successful",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message,
+      });
+    },
+  });
 
   const { mutateAsync: createDatabase, isPending: isCreating } = useMutation({
     mutationFn: async (values: FormData) => {
@@ -105,10 +143,8 @@ export default function DatabaseForm() {
       return res.json();
     },
     onSuccess: () => {
-      // Invalidate both the list query and the individual database query
       queryClient.invalidateQueries({ queryKey: ['/api/databases'] });
       queryClient.invalidateQueries({ queryKey: [`/api/databases/${params.id}`] });
-      // Invalidate all database logs queries to ensure they're refreshed
       queryClient.invalidateQueries({ 
         predicate: (query) => query.queryKey[0].toString().includes('/api/database-logs')
       });
@@ -140,6 +176,19 @@ export default function DatabaseForm() {
     }
   };
 
+  const handleTestConnection = () => {
+    const values = form.getValues();
+    if (!values.instanceId || !values.username || !values.password || !values.databaseName) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Please fill in all required fields before testing the connection",
+      });
+      return;
+    }
+    testConnection(values);
+  };
+
   if (isEditMode && isLoadingDatabase) {
     return (
       <BaseLayout>
@@ -149,6 +198,10 @@ export default function DatabaseForm() {
       </BaseLayout>
     );
   }
+
+  const selectedInstance = instances.find(
+    instance => instance.id === form.watch('instanceId')
+  );
 
   return (
     <BaseLayout>
@@ -179,31 +232,40 @@ export default function DatabaseForm() {
 
                 <FormField
                   control={form.control}
-                  name="host"
+                  name="instanceId"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Host</FormLabel>
-                      <FormControl>
-                        <Input placeholder="localhost" {...field} />
-                      </FormControl>
+                      <FormLabel>Instance</FormLabel>
+                      <Select
+                        onValueChange={(value) => field.onChange(parseInt(value, 10))}
+                        value={field.value?.toString()}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select an instance" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {instances.map((instance) => (
+                            <SelectItem key={instance.id} value={instance.id.toString()}>
+                              {instance.hostname} ({instance.isWriter ? 'Writer' : 'Reader'})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
 
-                <FormField
-                  control={form.control}
-                  name="port"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Port</FormLabel>
-                      <FormControl>
-                        <Input type="number" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                {selectedInstance && (
+                  <div className="rounded-md bg-muted p-4 text-sm">
+                    <p>Selected Instance Details:</p>
+                    <p>Hostname: {selectedInstance.hostname}</p>
+                    <p>Port: {selectedInstance.port}</p>
+                    <p>Role: {selectedInstance.isWriter ? 'Writer' : 'Reader'}</p>
+                  </div>
+                )}
 
                 <FormField
                   control={form.control}
@@ -305,20 +367,31 @@ export default function DatabaseForm() {
                   )}
                 />
 
-                <div className="flex justify-end gap-2">
+                <div className="flex justify-between items-center">
                   <Button
                     type="button"
-                    variant="outline"
-                    onClick={() => setLocation("/")}
+                    variant="secondary"
+                    onClick={handleTestConnection}
+                    disabled={isTestingConnection}
                   >
-                    Cancel
+                    {isTestingConnection ? "Testing..." : "Test Connection"}
                   </Button>
-                  <Button type="submit" disabled={isCreating || isUpdating}>
-                    {isEditMode
-                      ? (isUpdating ? "Updating..." : "Update Database")
-                      : (isCreating ? "Adding..." : "Add Database")
-                    }
-                  </Button>
+
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setLocation("/")}
+                    >
+                      Cancel
+                    </Button>
+                    <Button type="submit" disabled={isCreating || isUpdating}>
+                      {isEditMode
+                        ? (isUpdating ? "Updating..." : "Update Database")
+                        : (isCreating ? "Adding..." : "Add Database")
+                      }
+                    </Button>
+                  </div>
                 </div>
               </form>
             </Form>

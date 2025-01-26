@@ -1,9 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useParams } from "wouter";
+import { Link, useParams } from "wouter";
 import BaseLayout from "@/components/layout/base-layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Database, Activity } from "lucide-react";
+import { Database, Activity, Server } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { SelectDatabaseConnection, SelectDatabaseOperationLog } from "@db/schema";
 import { useState } from "react";
@@ -37,7 +38,14 @@ export default function DatabaseDetails() {
   const pageSize = 10;
   const [isTestingConnection, setIsTestingConnection] = useState(false);
 
-  const { data: database, isLoading: isLoadingDatabase } = useQuery<SelectDatabaseConnection>({
+  const { data: database, isLoading: isLoadingDatabase } = useQuery<SelectDatabaseConnection & {
+    instance: {
+      id: number;
+      hostname: string;
+      port: number;
+      isWriter: boolean;
+    };
+  }>({
     queryKey: [`/api/databases/${id}`],
   });
 
@@ -117,12 +125,21 @@ export default function DatabaseDetails() {
           <CardContent>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <p className="text-sm font-medium text-muted-foreground">Host</p>
-                <p>{database.host}</p>
+                <p className="text-sm font-medium text-muted-foreground">Instance</p>
+                <Link
+                  href={`/instances/${database.instance.id}`}
+                  className="flex items-center gap-2 text-primary hover:underline"
+                >
+                  <Server className="h-4 w-4" />
+                  {database.instance.hostname}
+                  <Badge variant="outline">
+                    {database.instance.isWriter ? 'Writer' : 'Reader'}
+                  </Badge>
+                </Link>
               </div>
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Port</p>
-                <p>{database.port}</p>
+                <p>{database.instance.port}</p>
               </div>
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Database Name</p>

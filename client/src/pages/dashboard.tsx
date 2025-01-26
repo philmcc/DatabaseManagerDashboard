@@ -4,12 +4,13 @@ import { useUser } from "@/hooks/use-user";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import { Link } from "wouter";
-import { Settings, LogOut, Database, Activity } from "lucide-react";
+import { Settings, LogOut, Database, Activity, Server } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import BaseLayout from "@/components/layout/base-layout";
 import { SelectDatabaseConnection, SelectDatabaseOperationLog } from "@db/schema";
 import { useState } from "react";
 import { format } from "date-fns";
+import { Badge } from "@/components/ui/badge";
 
 interface LogDetails {
   before?: Record<string, any>;
@@ -39,7 +40,14 @@ export default function Dashboard() {
   const pageSize = 5;
   const queryClient = useQueryClient();
 
-  const { data: databases = [], isLoading } = useQuery<SelectDatabaseConnection[]>({
+  const { data: databases = [], isLoading } = useQuery<(SelectDatabaseConnection & {
+    instance: {
+      id: number;
+      hostname: string;
+      port: number;
+      isWriter: boolean;
+    };
+  })[]>({
     queryKey: ['/api/databases'],
     enabled: !!user,
   });
@@ -162,8 +170,19 @@ export default function Dashboard() {
                     <Database className="h-4 w-4 text-muted-foreground" />
                   </CardHeader>
                   <CardContent>
-                    <div className="text-xs text-muted-foreground">
-                      <p>{db.databaseName} @ {db.host}:{db.port}</p>
+                    <div className="text-xs text-muted-foreground space-y-2">
+                      <p>Database: {db.databaseName}</p>
+                      <Link
+                        href={`/instances/${db.instance.id}`}
+                        className="flex items-center gap-1 text-primary hover:underline"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <Server className="h-3 w-3" />
+                        {db.instance.hostname}
+                        <Badge variant="outline" className="ml-1">
+                          {db.instance.isWriter ? 'Writer' : 'Reader'}
+                        </Badge>
+                      </Link>
                       <p>Username: {db.username}</p>
                     </div>
                     <div className="mt-2 space-x-2">
@@ -234,7 +253,7 @@ export default function Dashboard() {
                           <div className="flex justify-between items-start">
                             <div>
                               <p className="font-medium">
-                                {log.operationType.charAt(0).toUpperCase() + log.operationType.slice(1)} - {' '}
+                                {log.operationType.charAt(0).toUpperCase() + log.operationType.slice(1)} -{' '}
                                 <span className={log.operationResult === 'success' ? 'text-green-600' : 'text-red-600'}>
                                   {log.operationResult}
                                 </span>

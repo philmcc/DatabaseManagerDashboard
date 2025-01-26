@@ -1,7 +1,8 @@
-import { pgTable, text, serial, timestamp, integer, json, decimal } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, boolean, primaryKey, jsonb, numeric, json } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { relations } from "drizzle-orm";
 
+// Base tables
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   username: text("username").unique().notNull(),
@@ -15,6 +16,42 @@ export const users = pgTable("users", {
   updatedAt: timestamp("updatedAt").defaultNow(),
 });
 
+export const clusters = pgTable("clusters", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  description: text("description"),
+  userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  createdAt: timestamp("createdAt").defaultNow(),
+  updatedAt: timestamp("updatedAt").defaultNow(),
+});
+
+export const instances = pgTable("instances", {
+  id: serial("id").primaryKey(),
+  hostname: text("hostname").notNull(),
+  port: integer("port").notNull(),
+  username: text("username").notNull(),
+  password: text("password").notNull(),
+  description: text("description"),
+  isWriter: boolean("is_writer").default(false),
+  defaultDatabaseName: text("default_database_name"),
+  clusterId: integer("cluster_id").notNull().references(() => clusters.id, { onDelete: 'cascade' }),
+  userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  createdAt: timestamp("createdAt").defaultNow(),
+  updatedAt: timestamp("updatedAt").defaultNow(),
+});
+
+export const databaseConnections = pgTable("database_connections", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  instanceId: integer("instance_id").notNull().references(() => instances.id, { onDelete: 'cascade' }),
+  username: text("username").notNull(),
+  password: text("password").notNull(),
+  databaseName: text("database_name").notNull(),
+  userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  createdAt: timestamp("createdAt").defaultNow(),
+  updatedAt: timestamp("updatedAt").defaultNow(),
+});
+
 export const tags = pgTable("tags", {
   id: serial("id").primaryKey(),
   name: text("name").notNull().unique(),
@@ -22,33 +59,62 @@ export const tags = pgTable("tags", {
   userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
 });
 
-export const databaseConnections = pgTable("database_connections", {
-  id: serial("id").primaryKey(),
-  name: text("name").notNull(),
-  host: text("host").notNull(),
-  port: integer("port").notNull(),
-  username: text("username").notNull(),
-  password: text("password").notNull(),
-  databaseName: text("database_name").notNull(),
-  createdAt: timestamp("createdAt").defaultNow(),
-  updatedAt: timestamp("updatedAt").defaultNow(),
-  userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
-});
-
+// Junction tables
 export const databaseTags = pgTable("database_tags", {
   databaseId: integer("database_id").notNull().references(() => databaseConnections.id, { onDelete: 'cascade' }),
   tagId: integer("tag_id").notNull().references(() => tags.id, { onDelete: 'cascade' }),
-});
+}, (table) => ({
+  pk: primaryKey({ columns: [table.databaseId, table.tagId] }),
+}));
 
+// Add relations for tags
+export const databaseTagsRelations = relations(databaseTags, ({ one }) => ({
+  database: one(databaseConnections, {
+    fields: [databaseTags.databaseId],
+    references: [databaseConnections.id],
+  }),
+  tag: one(tags, {
+    fields: [databaseTags.tagId],
+    references: [tags.id],
+  }),
+}));
+
+// Relations
 export const userRelations = relations(users, ({ many }) => ({
   databaseConnections: many(databaseConnections),
   tags: many(tags),
+  clusters: many(clusters),
+  instances: many(instances),
 }));
 
-export const databaseConnectionsRelations = relations(databaseConnections, ({ one, many }) => ({
+export const clusterRelations = relations(clusters, ({ one, many }) => ({
+  user: one(users, {
+    fields: [clusters.userId],
+    references: [users.id],
+  }),
+  instances: many(instances),
+}));
+
+export const instanceRelations = relations(instances, ({ one, many }) => ({
+  cluster: one(clusters, {
+    fields: [instances.clusterId],
+    references: [clusters.id],
+  }),
+  user: one(users, {
+    fields: [instances.userId],
+    references: [users.id],
+  }),
+  databases: many(databaseConnections),
+}));
+
+export const databaseConnectionRelations = relations(databaseConnections, ({ one, many }) => ({
   user: one(users, {
     fields: [databaseConnections.userId],
     references: [users.id],
+  }),
+  instance: one(instances, {
+    fields: [databaseConnections.instanceId],
+    references: [instances.id],
   }),
   tags: many(databaseTags),
 }));
@@ -61,16 +127,6 @@ export const tagsRelations = relations(tags, ({ one, many }) => ({
   databases: many(databaseTags),
 }));
 
-export const databaseTagsRelations = relations(databaseTags, ({ one }) => ({
-  database: one(databaseConnections, {
-    fields: [databaseTags.databaseId],
-    references: [databaseConnections.id],
-  }),
-  tag: one(tags, {
-    fields: [databaseTags.tagId],
-    references: [tags.id],
-  }),
-}));
 
 export const databaseOperationLogs = pgTable("database_operation_logs", {
   id: serial("id").primaryKey(),
@@ -78,10 +134,23 @@ export const databaseOperationLogs = pgTable("database_operation_logs", {
   userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
   operationType: text("operation_type").notNull(),
   operationResult: text("operation_result").notNull(),
-  details: json("details"),
+  details: jsonb("details").notNull(),
   timestamp: timestamp("timestamp").defaultNow(),
 });
 
+export const databaseMetrics = pgTable("database_metrics", {
+  id: serial("id").primaryKey(),
+  databaseId: integer("database_id").notNull().references(() => databaseConnections.id, { onDelete: 'cascade' }),
+  timestamp: timestamp("timestamp").defaultNow(),
+  activeConnections: integer("active_connections").notNull(),
+  databaseSize: numeric("database_size").notNull(),
+  slowQueries: integer("slow_queries").notNull(),
+  avgQueryTime: numeric("avg_query_time").notNull(),
+  cacheHitRatio: numeric("cache_hit_ratio").notNull(),
+  metrics: json("metrics").notNull(),
+});
+
+// Add relations for the new tables
 export const databaseOperationLogsRelations = relations(databaseOperationLogs, ({ one }) => ({
   database: one(databaseConnections, {
     fields: [databaseOperationLogs.databaseId],
@@ -93,18 +162,6 @@ export const databaseOperationLogsRelations = relations(databaseOperationLogs, (
   }),
 }));
 
-export const databaseMetrics = pgTable("database_metrics", {
-  id: serial("id").primaryKey(),
-  databaseId: integer("database_id").notNull().references(() => databaseConnections.id, { onDelete: 'cascade' }),
-  timestamp: timestamp("timestamp").defaultNow(),
-  activeConnections: integer("active_connections"),
-  databaseSize: decimal("database_size"),
-  slowQueries: integer("slow_queries"),
-  avgQueryTime: decimal("avg_query_time"),
-  cacheHitRatio: decimal("cache_hit_ratio"),
-  metrics: json("metrics").notNull(),
-});
-
 export const databaseMetricsRelations = relations(databaseMetrics, ({ one }) => ({
   database: one(databaseConnections, {
     fields: [databaseMetrics.databaseId],
@@ -112,6 +169,7 @@ export const databaseMetricsRelations = relations(databaseMetrics, ({ one }) => 
   }),
 }));
 
+// Schema validation
 export const insertUserSchema = createInsertSchema(users);
 export const selectUserSchema = createSelectSchema(users);
 
@@ -121,12 +179,13 @@ export const selectTagSchema = createSelectSchema(tags);
 export const insertDatabaseConnectionSchema = createInsertSchema(databaseConnections);
 export const selectDatabaseConnectionSchema = createSelectSchema(databaseConnections);
 
-export const insertDatabaseOperationLogSchema = createInsertSchema(databaseOperationLogs);
-export const selectDatabaseOperationLogSchema = createSelectSchema(databaseOperationLogs);
+export const insertClusterSchema = createInsertSchema(clusters);
+export const selectClusterSchema = createSelectSchema(clusters);
 
-export const insertDatabaseMetricsSchema = createInsertSchema(databaseMetrics);
-export const selectDatabaseMetricsSchema = createSelectSchema(databaseMetrics);
+export const insertInstanceSchema = createInsertSchema(instances);
+export const selectInstanceSchema = createSelectSchema(instances);
 
+// Types
 export type InsertUser = typeof users.$inferInsert;
 export type SelectUser = typeof users.$inferSelect;
 
@@ -136,8 +195,8 @@ export type SelectTag = typeof tags.$inferSelect;
 export type InsertDatabaseConnection = typeof databaseConnections.$inferInsert;
 export type SelectDatabaseConnection = typeof databaseConnections.$inferSelect;
 
-export type InsertDatabaseOperationLog = typeof databaseOperationLogs.$inferInsert;
-export type SelectDatabaseOperationLog = typeof databaseOperationLogs.$inferSelect;
+export type InsertCluster = typeof clusters.$inferInsert;
+export type SelectCluster = typeof clusters.$inferSelect;
 
-export type InsertDatabaseMetrics = typeof databaseMetrics.$inferInsert;
-export type SelectDatabaseMetrics = typeof databaseMetrics.$inferSelect;
+export type InsertInstance = typeof instances.$inferInsert;
+export type SelectInstance = typeof instances.$inferSelect;

@@ -666,16 +666,16 @@ export function registerRoutes(app: Express): Server {
 
     try {
       const { id } = req.params;
-      const [instance] = await db
-        .select()
-        .from(instances)
-        .where(
-          and(
-            eq(instances.id, parseInt(id)),
-            eq(instances.userId, req.user.id)
-          )
-        )
-        .limit(1);
+      const instance = await db.query.instances.findFirst({
+        where: and(
+          eq(instances.id, parseInt(id)),
+          eq(instances.userId, req.user.id)
+        ),
+        with: {
+          cluster: true,
+          databases: true,
+        },
+      });
 
       if (!instance) {
         return res.status(404).send("Instance not found");

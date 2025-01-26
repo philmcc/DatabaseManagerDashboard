@@ -1,16 +1,20 @@
 import { useQuery } from "@tanstack/react-query";
-import { useLocation, useParams } from "wouter";
+import { useLocation, useParams, Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, PlusCircle } from "lucide-react";
 import type { SelectCluster, SelectInstance } from "@db/schema";
 import Navbar from "@/components/layout/navbar";
 
+interface ClusterResponse extends SelectCluster {
+  instances: SelectInstance[];
+}
+
 function ClusterDetails() {
   const [location, navigate] = useLocation();
   const params = useParams<{ id: string }>();
 
-  const { data: cluster, isLoading } = useQuery<SelectCluster>({
+  const { data: cluster, isLoading } = useQuery<ClusterResponse>({
     queryKey: [`/api/clusters/${params.id}`],
     enabled: !!params.id,
   });
@@ -77,7 +81,7 @@ function ClusterDetails() {
             <div>
               <h3 className="font-medium">Created</h3>
               <p className="text-muted-foreground">
-                {new Date(cluster.createdAt!).toLocaleDateString()}
+                {cluster.createdAt ? new Date(cluster.createdAt).toLocaleDateString() : 'N/A'}
               </p>
             </div>
             {cluster.updatedAt && (
@@ -94,19 +98,19 @@ function ClusterDetails() {
         <div className="flex justify-between items-center">
           <h2 className="text-2xl font-bold">Instances</h2>
           <Button asChild>
-            <a href={`/clusters/${params.id}/instances/new`}>
+            <Link href={`/clusters/${params.id}/instances/new`}>
               <PlusCircle className="mr-2 h-4 w-4" />
               Add Instance
-            </a>
+            </Link>
           </Button>
         </div>
 
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {cluster.instances?.map((instance: SelectInstance) => (
+          {cluster.instances.map((instance: SelectInstance) => (
             <Card key={instance.id} className="hover:bg-accent/50 transition-colors">
               <CardHeader 
                 className="cursor-pointer" 
-                onClick={() => navigate(`/clusters/${params.id}/instances/${instance.id}`)}
+                onClick={() => navigate(`/clusters/${params.id}/instances/${instance.id}/edit`)}
               >
                 <CardTitle className="flex justify-between items-center">
                   <span>{instance.hostname}</span>
@@ -131,7 +135,7 @@ function ClusterDetails() {
               </CardContent>
             </Card>
           ))}
-          {!cluster.instances?.length && (
+          {!cluster.instances.length && (
             <Card className="col-span-full">
               <CardContent className="py-8">
                 <div className="text-center text-muted-foreground">

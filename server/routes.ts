@@ -479,12 +479,17 @@ export function registerRoutes(app: Express): Server {
         });
       }
 
-      // Construct the connection string with SSL mode
-      const connectionString = `postgres://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${instance.hostname}:${instance.port}/${encodeURIComponent(databaseName)}?sslmode=require`;
-
-      // Test connection using connection string
+      // Test connection using connection string and SSL settings
       const client = new Client({
-        connectionString,
+        host: instance.hostname,
+        port: instance.port,
+        user: username,
+        password,
+        database: databaseName,
+        ssl: {
+          rejectUnauthorized: false,
+          requestCert: true,
+        }
       });
 
       try {
@@ -503,6 +508,7 @@ export function registerRoutes(app: Express): Server {
       res.status(500).send("Error testing connection");
     }
   });
+
 
   // Tags Management Endpoints
   app.get("/api/tags", async (req, res) => {
@@ -1078,6 +1084,5 @@ export function registerRoutes(app: Express): Server {
   });
 
 
-  const httpServer = createServer(app);
-  return httpServer;
+  const httpServer = createServer(app);  return httpServer;
 }

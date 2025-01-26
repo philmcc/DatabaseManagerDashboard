@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { setupAuth } from "./auth";
 import { db } from "@db";
-import { users, databaseConnections, tags, databaseTags, databaseOperationLogs } from "@db/schema";
+import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import pkg from 'pg';
 const { Client } = pkg;
@@ -516,6 +516,137 @@ export function registerRoutes(app: Express): Server {
     } catch (error) {
       console.error("Database logs fetch error:", error);
       res.status(500).send("Error fetching database logs");
+    }
+  });
+
+  app.get("/api/databases/:id/metrics", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { id } = req.params;
+      const timeRange = req.query.timeRange || '1h'; // Default to last hour
+
+      // Get database connection details
+      const [dbConnection] = await db
+        .select()
+        .from(databaseConnections)
+        .where(
+          and(
+            eq(databaseConnections.id, parseInt(id)),
+            eq(databaseConnections.userId, req.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!dbConnection) {
+        return res.status(404).send("Database connection not found");
+      }
+
+      // Connect to the database to collect metrics
+      const client = new Client({
+        host: dbConnection.host,
+        port: dbConnection.port,
+        user: dbConnection.username,
+        password: dbConnection.password,
+        database: dbConnection.databaseName,
+      });
+
+      await client.connect();
+
+      // Collect various metrics
+      const metrics = {
+        activeConnections: 0,
+        databaseSize: 0,
+        slowQueries: 0,
+        avgQueryTime: 0,
+        cacheHitRatio: 0,
+        tableStats: [],
+      };
+
+      // Get active connections
+      const activeConnectionsResult = await client.query(
+        "SELECT count(*) as count FROM pg_stat_activity WHERE state = 'active'"
+      );
+      metrics.activeConnections = parseInt(activeConnectionsResult.rows[0].count);
+
+      // Get database size
+      const dbSizeResult = await client.query(
+        "SELECT pg_database_size(current_database()) / 1024.0 / 1024.0 as size_mb"
+      );
+      metrics.databaseSize = parseFloat(dbSizeResult.rows[0].size_mb);
+
+      // Get slow queries (queries taking more than 1000ms)
+      const slowQueriesResult = await client.query(
+        "SELECT count(*) as count FROM pg_stat_activity WHERE state = 'active' AND now() - query_start > interval '1 second'"
+      );
+      metrics.slowQueries = parseInt(slowQueriesResult.rows[0].count);
+
+      // Get cache hit ratio
+      const cacheHitResult = await client.query(`
+        SELECT 
+          sum(heap_blks_hit) / (sum(heap_blks_hit) + sum(heap_blks_read)) as ratio
+        FROM pg_statio_user_tables
+      `);
+      metrics.cacheHitRatio = parseFloat(cacheHitResult.rows[0].ratio || 0);
+
+      // Get table statistics
+      const tableStatsResult = await client.query(`
+        SELECT 
+          relname as table_name,
+          n_live_tup as row_count,
+          n_dead_tup as dead_tuples,
+          pg_total_relation_size(relid) / 1024.0 / 1024.0 as size_mb
+        FROM pg_stat_user_tables
+        ORDER BY n_live_tup DESC
+        LIMIT 10
+      `);
+      metrics.tableStats = tableStatsResult.rows;
+
+      await client.end();
+
+      // Store metrics in our database
+      const [storedMetrics] = await db
+        .insert(databaseMetrics)
+        .values({
+          databaseId: parseInt(id),
+          activeConnections: metrics.activeConnections,
+          databaseSize: metrics.databaseSize,
+          slowQueries: metrics.slowQueries,
+          cacheHitRatio: metrics.cacheHitRatio,
+          metrics: metrics,
+        })
+        .returning();
+
+      // Get historical metrics
+      const timeFilter = timeRange === '24h'
+        ? sql`interval '24 hours'`
+        : timeRange === '7d'
+          ? sql`interval '7 days'`
+          : sql`interval '1 hour'`;
+
+      const historicalMetrics = await db
+        .select()
+        .from(databaseMetrics)
+        .where(
+          and(
+            eq(databaseMetrics.databaseId, parseInt(id)),
+            sql`${databaseMetrics.timestamp} >= now() - ${timeFilter}`
+          )
+        )
+        .orderBy(databaseMetrics.timestamp);
+
+      res.json({
+        current: metrics,
+        historical: historicalMetrics,
+      });
+    } catch (error: any) {
+      console.error("Database metrics error:", error);
+      res.status(500).json({
+        message: "Error fetching database metrics",
+        error: error.message,
+      });
     }
   });
 

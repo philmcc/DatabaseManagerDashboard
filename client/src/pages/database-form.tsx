@@ -6,10 +6,12 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { useLocation } from "wouter";
+import { useLocation, useParams } from "wouter";
 import BaseLayout from "@/components/layout/base-layout";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Database } from "lucide-react";
+import { SelectDatabaseConnection } from "@db/schema";
+import React from 'react';
 
 const formSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -26,15 +28,30 @@ export default function DatabaseForm() {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
+  const params = useParams();
+  const isEditMode = params.id != null;
+
+  const { data: existingDatabase, isLoading: isLoadingDatabase } = useQuery<SelectDatabaseConnection>({
+    queryKey: ['/api/databases', params.id],
+    enabled: isEditMode,
+  });
 
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       port: 5432, // Default PostgreSQL port
+      ...existingDatabase,
     },
   });
 
-  const { mutateAsync: createDatabase, isPending } = useMutation({
+  // Update form values when existing database data is loaded
+  React.useEffect(() => {
+    if (existingDatabase) {
+      form.reset(existingDatabase);
+    }
+  }, [existingDatabase, form]);
+
+  const { mutateAsync: createDatabase, isPending: isCreating } = useMutation({
     mutationFn: async (values: FormData) => {
       const res = await fetch("/api/databases", {
         method: "POST",
@@ -55,13 +72,42 @@ export default function DatabaseForm() {
     },
   });
 
+  const { mutateAsync: updateDatabase, isPending: isUpdating } = useMutation({
+    mutationFn: async (values: FormData) => {
+      const res = await fetch(`/api/databases/${params.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(values),
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        const error = await res.text();
+        throw new Error(error);
+      }
+
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/databases'] });
+    },
+  });
+
   const onSubmit = async (values: FormData) => {
     try {
-      await createDatabase(values);
-      toast({
-        title: "Success",
-        description: "Database connection added successfully",
-      });
+      if (isEditMode) {
+        await updateDatabase(values);
+        toast({
+          title: "Success",
+          description: "Database connection updated successfully",
+        });
+      } else {
+        await createDatabase(values);
+        toast({
+          title: "Success",
+          description: "Database connection added successfully",
+        });
+      }
       setLocation("/");
     } catch (error: any) {
       toast({
@@ -72,6 +118,16 @@ export default function DatabaseForm() {
     }
   };
 
+  if (isEditMode && isLoadingDatabase) {
+    return (
+      <BaseLayout>
+        <div className="flex items-center justify-center min-h-[50vh]">
+          <p>Loading database details...</p>
+        </div>
+      </BaseLayout>
+    );
+  }
+
   return (
     <BaseLayout>
       <div className="max-w-2xl mx-auto">
@@ -79,7 +135,7 @@ export default function DatabaseForm() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Database className="h-5 w-5" />
-              Add Database Connection
+              {isEditMode ? "Edit Database Connection" : "Add Database Connection"}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -177,8 +233,11 @@ export default function DatabaseForm() {
                   >
                     Cancel
                   </Button>
-                  <Button type="submit" disabled={isPending}>
-                    {isPending ? "Adding..." : "Add Database"}
+                  <Button type="submit" disabled={isCreating || isUpdating}>
+                    {isEditMode 
+                      ? (isUpdating ? "Updating..." : "Update Database")
+                      : (isCreating ? "Adding..." : "Add Database")
+                    }
                   </Button>
                 </div>
               </form>

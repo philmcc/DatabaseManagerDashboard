@@ -37,6 +37,9 @@ function Router() {
       <Route path="/databases/new">
         {user ? <DatabaseForm /> : <Home />}
       </Route>
+      <Route path="/databases/:id/edit">
+        {user ? <DatabaseForm /> : <Home />}
+      </Route>
       <Route component={NotFound} />
     </Switch>
   );

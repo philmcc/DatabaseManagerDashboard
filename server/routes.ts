@@ -121,6 +121,83 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
+  app.patch("/api/databases/:id", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { id } = req.params;
+      const { name, host, port, username, password, databaseName, tags: tagIds } = req.body;
+
+      // First test the connection
+      const client = new Client({
+        host,
+        port,
+        user: username,
+        password,
+        database: databaseName,
+      });
+
+      try {
+        await client.connect();
+        await client.end();
+      } catch (error: any) {
+        return res.status(400).json({
+          message: "Failed to connect to database",
+          error: error.message,
+        });
+      }
+
+      // Update the database if connection test passed
+      const [updatedDatabase] = await db
+        .update(databaseConnections)
+        .set({
+          name,
+          host,
+          port,
+          username,
+          password,
+          databaseName,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(databaseConnections.id, parseInt(id)),
+            eq(databaseConnections.userId, req.user.id)
+          )
+        )
+        .returning();
+
+      if (!updatedDatabase) {
+        return res.status(404).send("Database not found");
+      }
+
+      // Update tags if provided
+      if (tagIds) {
+        // First remove existing tags
+        await db
+          .delete(databaseTags)
+          .where(eq(databaseTags.databaseId, updatedDatabase.id));
+
+        // Then add new tags
+        if (tagIds.length > 0) {
+          await db.insert(databaseTags).values(
+            tagIds.map((tagId: number) => ({
+              databaseId: updatedDatabase.id,
+              tagId,
+            }))
+          );
+        }
+      }
+
+      res.json(updatedDatabase);
+    } catch (error) {
+      console.error("Database update error:", error);
+      res.status(500).send("Error updating database connection");
+    }
+  });
+
   app.post("/api/databases/:id/test", async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");

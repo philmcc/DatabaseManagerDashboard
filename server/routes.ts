@@ -1013,7 +1013,6 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  // Add test connection endpoint
   app.post("/api/test-connection", async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
@@ -1040,13 +1039,12 @@ export function registerRoutes(app: Express): Server {
         });
       }
 
-      // Test connection using instance details
+      // Construct the connection string
+      const connectionString = `postgres://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${instance.hostname}:${instance.port}/${encodeURIComponent(databaseName)}`;
+
+      // Test connection using connection string
       const client = new Client({
-        host: instance.hostname,
-        port: instance.port,
-        user: username,
-        password,
-        database: databaseName,
+        connectionString,
       });
 
       try {

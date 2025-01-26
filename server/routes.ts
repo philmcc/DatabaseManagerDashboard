@@ -201,6 +201,15 @@ export function registerRoutes(app: Express): Server {
         return res.status(404).send("Database not found");
       }
 
+      // Get existing tags
+      const existingTags = await db
+        .select()
+        .from(databaseTags)
+        .where(eq(databaseTags.databaseId, parseInt(id)));
+
+      const existingTagIds = existingTags.map(t => t.tagId);
+      const newTagIds = tagIds || [];
+
       // Test connection first
       const client = new Client({
         host,
@@ -227,14 +236,16 @@ export function registerRoutes(app: Express): Server {
               host: existingDatabase.host,
               port: existingDatabase.port,
               username: existingDatabase.username,
-              databaseName: existingDatabase.databaseName
+              databaseName: existingDatabase.databaseName,
+              tags: existingTagIds
             },
             attempted: {
               name,
               host,
               port,
               username,
-              databaseName
+              databaseName,
+              tags: newTagIds
             }
           },
         });
@@ -265,12 +276,14 @@ export function registerRoutes(app: Express): Server {
         )
         .returning();
 
-      // Update tags if provided
-      if (tagIds) {
+      // Update tags
+      if (tagIds !== undefined) {
+        // Remove existing tags
         await db
           .delete(databaseTags)
           .where(eq(databaseTags.databaseId, updatedDatabase.id));
 
+        // Add new tags
         if (tagIds.length > 0) {
           await db.insert(databaseTags).values(
             tagIds.map((tagId: number) => ({
@@ -281,7 +294,12 @@ export function registerRoutes(app: Express): Server {
         }
       }
 
-      // Log successful update with before/after values
+      // Get tag names for logging
+      const allTags = await db.select().from(tags);
+      const getTagNames = (ids: number[]) => 
+        ids.map(id => allTags.find(t => t.id === id)?.name || `Unknown (${id})`);
+
+      // Log successful update with before/after values including tags
       await db.insert(databaseOperationLogs).values({
         databaseId: updatedDatabase.id,
         userId: req.user.id,
@@ -293,19 +311,27 @@ export function registerRoutes(app: Express): Server {
             host: existingDatabase.host,
             port: existingDatabase.port,
             username: existingDatabase.username,
-            databaseName: existingDatabase.databaseName
+            databaseName: existingDatabase.databaseName,
+            tags: getTagNames(existingTagIds)
           },
           after: {
             name: updatedDatabase.name,
             host: updatedDatabase.host,
             port: updatedDatabase.port,
             username: updatedDatabase.username,
-            databaseName: updatedDatabase.databaseName
+            databaseName: updatedDatabase.databaseName,
+            tags: getTagNames(newTagIds)
           }
         },
       });
 
-      res.json(updatedDatabase);
+      // Return updated database with tags
+      const databaseWithTags = {
+        ...updatedDatabase,
+        tags: tagIds.map((tagId: number) => ({ tagId }))
+      };
+
+      res.json(databaseWithTags);
     } catch (error) {
       console.error("Database update error:", error);
       res.status(500).send("Error updating database connection");

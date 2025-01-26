@@ -668,18 +668,17 @@ export function registerRoutes(app: Express): Server {
   });
 
   // Clusters Management Endpoints
+  // Modified clusters fetch endpoint
   app.get("/api/clusters", async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
 
     try {
-      const userClusters = await db.query.clusters.findMany({
-        where: eq(clusters.userId, req.user.id),
-        with: {
-          instances: true,
-        },
-      });
+      const userClusters = await db
+        .select()
+        .from(clusters)
+        .where(eq(clusters.userId, req.user.id));
 
       res.json(userClusters);
     } catch (error) {
@@ -711,6 +710,7 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
+  // Modified cluster details endpoint
   app.get("/api/clusters/:id", async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
@@ -718,21 +718,31 @@ export function registerRoutes(app: Express): Server {
 
     try {
       const { id } = req.params;
-      const cluster = await db.query.clusters.findFirst({
-        where: and(
-          eq(clusters.id, parseInt(id)),
-          eq(clusters.userId, req.user.id)
-        ),
-        with: {
-          instances: true,
-        },
-      });
+      const cluster = await db
+        .select()
+        .from(clusters)
+        .where(
+          and(
+            eq(clusters.id, parseInt(id)),
+            eq(clusters.userId, req.user.id)
+          )
+        )
+        .limit(1);
 
-      if (!cluster) {
+      if (!cluster.length) {
         return res.status(404).send("Cluster not found");
       }
 
-      res.json(cluster);
+      // Fetch instances separately
+      const clusterInstances = await db
+        .select()
+        .from(instances)
+        .where(eq(instances.clusterId, parseInt(id)));
+
+      res.json({
+        ...cluster[0],
+        instances: clusterInstances
+      });
     } catch (error) {
       console.error("Cluster fetch error:", error);
       res.status(500).send("Error fetching cluster");

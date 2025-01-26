@@ -108,7 +108,10 @@ export default function DatabaseForm() {
       // Invalidate both the list query and the individual database query
       queryClient.invalidateQueries({ queryKey: ['/api/databases'] });
       queryClient.invalidateQueries({ queryKey: [`/api/databases/${params.id}`] });
-      queryClient.invalidateQueries({ queryKey: ['/api/database-logs'] });
+      // Invalidate all database logs queries to ensure they're refreshed
+      queryClient.invalidateQueries({ 
+        predicate: (query) => query.queryKey[0].toString().includes('/api/database-logs')
+      });
     },
   });
 

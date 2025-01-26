@@ -129,7 +129,7 @@ export function registerRoutes(app: Express): Server {
         user: username,
         password,
         database: databaseName,
-        ssl: { rejectUnauthorized: false } //Added for SSL
+        ssl: { rejectUnauthorized: false } 
       });
 
       try {
@@ -255,7 +255,7 @@ export function registerRoutes(app: Express): Server {
         user: username,
         password,
         database: databaseName,
-        ssl: { rejectUnauthorized: false } //Added for SSL
+        ssl: { rejectUnauthorized: false } 
       });
 
       try {
@@ -479,17 +479,14 @@ export function registerRoutes(app: Express): Server {
         });
       }
 
-      // Test connection using connection string and SSL settings
+      // Test connection using instance details
       const client = new Client({
         host: instance.hostname,
         port: instance.port,
         user: username,
         password,
         database: databaseName,
-        ssl: {
-          rejectUnauthorized: false,
-          requestCert: true,
-        }
+        ssl: { rejectUnauthorized: false }
       });
 
       try {
@@ -641,7 +638,7 @@ export function registerRoutes(app: Express): Server {
         user: dbConnection.username,
         password: dbConnection.password,
         database: dbConnection.databaseName,
-        ssl: { rejectUnauthorized: false } //Added for SSL
+        ssl: { rejectUnauthorized: false } 
       });
 
       try {
@@ -911,7 +908,7 @@ export function registerRoutes(app: Express): Server {
         user: username,
         password,
         database: defaultDatabaseName || 'postgres',
-        ssl: { rejectUnauthorized: false } //Added for SSL
+        ssl: { rejectUnauthorized: false } 
       });
 
       try {
@@ -996,7 +993,7 @@ export function registerRoutes(app: Express): Server {
         user: username,
         password,
         database: defaultDatabaseName || 'postgres',
-        ssl: { rejectUnauthorized: false } //Added for SSL
+        ssl: { rejectUnauthorized: false } 
       });
 
       try {

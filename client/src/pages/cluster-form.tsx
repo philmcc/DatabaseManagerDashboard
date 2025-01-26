@@ -19,6 +19,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Loader2 } from "lucide-react";
 import type { SelectCluster } from "@db/schema";
 import React from "react";
+import Navbar from "@/components/layout/navbar";
 
 const clusterSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -110,64 +111,67 @@ export default function ClusterForm() {
   };
 
   return (
-    <div className="container mx-auto py-6">
-      <div className="max-w-2xl mx-auto">
-        <h1 className="text-3xl font-bold mb-6">
-          {isEditing ? "Edit Cluster" : "Create New Cluster"}
-        </h1>
-        <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
-            <FormField
-              control={form.control}
-              name="name"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Cluster Name</FormLabel>
-                  <FormControl>
-                    <Input placeholder="Production DB Cluster" {...field} />
-                  </FormControl>
-                  <FormDescription>
-                    A unique name for your database cluster
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+    <div>
+      <Navbar />
+      <div className="container mx-auto py-6">
+        <div className="max-w-2xl mx-auto">
+          <h1 className="text-3xl font-bold mb-6">
+            {isEditing ? "Edit Cluster" : "Create New Cluster"}
+          </h1>
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
+              <FormField
+                control={form.control}
+                name="name"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Cluster Name</FormLabel>
+                    <FormControl>
+                      <Input placeholder="Production DB Cluster" {...field} />
+                    </FormControl>
+                    <FormDescription>
+                      A unique name for your database cluster
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
-            <FormField
-              control={form.control}
-              name="description"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Description</FormLabel>
-                  <FormControl>
-                    <Textarea
-                      placeholder="Optional description of the cluster"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    Add details about the purpose and configuration of this cluster
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+              <FormField
+                control={form.control}
+                name="description"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Description</FormLabel>
+                    <FormControl>
+                      <Textarea
+                        placeholder="Optional description of the cluster"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      Add details about the purpose and configuration of this cluster
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
-            <div className="flex justify-end gap-4">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => navigate("/clusters")}
-              >
-                Cancel
-              </Button>
-              <Button type="submit">
-                {isEditing ? "Update Cluster" : "Create Cluster"}
-              </Button>
-            </div>
-          </form>
-        </Form>
+              <div className="flex justify-end gap-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => navigate("/clusters")}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit">
+                  {isEditing ? "Update Cluster" : "Create Cluster"}
+                </Button>
+              </div>
+            </form>
+          </Form>
+        </div>
       </div>
     </div>
   );

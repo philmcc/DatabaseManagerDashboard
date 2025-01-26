@@ -63,6 +63,35 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
+  app.get("/api/databases/:id", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { id } = req.params;
+      const [database] = await db
+        .select()
+        .from(databaseConnections)
+        .where(
+          and(
+            eq(databaseConnections.id, parseInt(id)),
+            eq(databaseConnections.userId, req.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!database) {
+        return res.status(404).send("Database not found");
+      }
+
+      res.json(database);
+    } catch (error) {
+      console.error("Database fetch error:", error);
+      res.status(500).send("Error fetching database");
+    }
+  });
+
   app.post("/api/databases", async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");

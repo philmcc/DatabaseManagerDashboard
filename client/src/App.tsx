@@ -12,6 +12,10 @@ import DatabaseForm from "@/pages/database-form";
 import DatabaseDetails from "@/pages/database-details";
 import LogsPage from "@/pages/logs";
 import TagsPage from "@/pages/tags";
+import ClustersPage from "@/pages/clusters";
+import ClusterDetails from "@/pages/cluster-details";
+import InstanceForm from "@/pages/instance-form";
+import InstanceDetails from "@/pages/instance-details";
 import { useUser } from "@/hooks/use-user";
 import { Loader2 } from "lucide-react";
 
@@ -51,6 +55,28 @@ function Router() {
       </Route>
       <Route path="/databases/:id/edit">
         {user ? <DatabaseForm /> : <Home />}
+      </Route>
+      {/* New routes for clusters and instances */}
+      <Route path="/clusters">
+        {user ? <ClustersPage /> : <Home />}
+      </Route>
+      <Route path="/clusters/new">
+        {user ? <ClusterDetails /> : <Home />}
+      </Route>
+      <Route path="/clusters/:id">
+        {user ? <ClusterDetails /> : <Home />}
+      </Route>
+      <Route path="/clusters/:id/edit">
+        {user ? <ClusterDetails /> : <Home />}
+      </Route>
+      <Route path="/clusters/:clusterId/instances/new">
+        {user ? <InstanceForm /> : <Home />}
+      </Route>
+      <Route path="/instances/:id">
+        {user ? <InstanceDetails /> : <Home />}
+      </Route>
+      <Route path="/instances/:id/edit">
+        {user ? <InstanceForm /> : <Home />}
       </Route>
       <Route component={NotFound} />
     </Switch>

@@ -12,7 +12,7 @@ import BaseLayout from "@/components/layout/base-layout";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Database } from "lucide-react";
 import { SelectDatabaseConnection, SelectInstance, SelectTag } from "@db/schema";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 const formSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -31,6 +31,7 @@ export default function DatabaseForm() {
   const queryClient = useQueryClient();
   const params = useParams();
   const isEditMode = params.id != null;
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
 
   const { data: existingDatabase, isLoading: isLoadingDatabase } = useQuery<SelectDatabaseConnection>({
     queryKey: [`/api/databases/${params.id}`],
@@ -65,6 +66,43 @@ export default function DatabaseForm() {
       });
     }
   }, [existingDatabase, form]);
+
+  // Test connection mutation
+  const { mutate: testConnection } = useMutation({
+    mutationFn: async (values: FormData) => {
+      setIsTestingConnection(true);
+      try {
+        const res = await fetch("/api/test-connection", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(values),
+          credentials: "include",
+        });
+
+        if (!res.ok) {
+          const error = await res.text();
+          throw new Error(error);
+        }
+
+        return res.json();
+      } finally {
+        setIsTestingConnection(false);
+      }
+    },
+    onSuccess: () => {
+      toast({
+        title: "Success",
+        description: "Connection test successful",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message,
+      });
+    },
+  });
 
   const { mutateAsync: createDatabase, isPending: isCreating } = useMutation({
     mutationFn: async (values: FormData) => {
@@ -136,6 +174,19 @@ export default function DatabaseForm() {
         description: error.message,
       });
     }
+  };
+
+  const handleTestConnection = () => {
+    const values = form.getValues();
+    if (!values.instanceId || !values.username || !values.password || !values.databaseName) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Please fill in all required fields before testing the connection",
+      });
+      return;
+    }
+    testConnection(values);
   };
 
   if (isEditMode && isLoadingDatabase) {
@@ -316,20 +367,31 @@ export default function DatabaseForm() {
                   )}
                 />
 
-                <div className="flex justify-end gap-2">
+                <div className="flex justify-between items-center">
                   <Button
                     type="button"
-                    variant="outline"
-                    onClick={() => setLocation("/")}
+                    variant="secondary"
+                    onClick={handleTestConnection}
+                    disabled={isTestingConnection}
                   >
-                    Cancel
+                    {isTestingConnection ? "Testing..." : "Test Connection"}
                   </Button>
-                  <Button type="submit" disabled={isCreating || isUpdating}>
-                    {isEditMode
-                      ? (isUpdating ? "Updating..." : "Update Database")
-                      : (isCreating ? "Adding..." : "Add Database")
-                    }
-                  </Button>
+
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setLocation("/")}
+                    >
+                      Cancel
+                    </Button>
+                    <Button type="submit" disabled={isCreating || isUpdating}>
+                      {isEditMode
+                        ? (isUpdating ? "Updating..." : "Update Database")
+                        : (isCreating ? "Adding..." : "Add Database")
+                      }
+                    </Button>
+                  </div>
                 </div>
               </form>
             </Form>

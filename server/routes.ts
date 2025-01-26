@@ -1014,39 +1014,55 @@ export function registerRoutes(app: Express): Server {
   });
 
   // Add test connection endpoint
-  app.post("/api/instances/test-connection", async (req, res) => {
+  app.post("/api/test-connection", async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
 
     try {
-      const { hostname, port, username, password, defaultDatabaseName } = req.body;
+      const { instanceId, username, password, databaseName } = req.body;
 
+      // Get instance details
+      const [instance] = await db
+        .select()
+        .from(instances)
+        .where(
+          and(
+            eq(instances.id, instanceId),
+            eq(instances.userId, req.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!instance) {
+        return res.status(404).json({
+          message: "Instance not found",
+        });
+      }
+
+      // Test connection using instance details
       const client = new Client({
-        host: hostname,
-        port,
+        host: instance.hostname,
+        port: instance.port,
         user: username,
         password,
-        database: defaultDatabaseName || 'postgres',
+        database: databaseName,
       });
 
       try {
         await client.connect();
         await client.end();
-        res.json({ success: true, message: "Connection successful" });
+
+        res.json({ message: "Connection successful" });
       } catch (error: any) {
         res.status(400).json({
-          success: false,
-          message: "Connection failed",
+          message: "Failed to connect to database",
           error: error.message,
         });
       }
     } catch (error) {
       console.error("Connection test error:", error);
-      res.status(500).json({
-        message: "Error testing connection",
-        error: error instanceof Error ? error.message : String(error),
-      });
+      res.status(500).send("Error testing connection");
     }
   });
 

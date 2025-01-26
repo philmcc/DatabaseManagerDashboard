@@ -8,6 +8,7 @@ import Dashboard from "@/pages/dashboard";
 import AuthPage from "@/pages/auth-page";
 import ResetPassword from "@/pages/reset-password";
 import ProfileSettings from "@/pages/profile-settings";
+import DatabaseForm from "@/pages/database-form";
 import { useUser } from "@/hooks/use-user";
 import { Loader2 } from "lucide-react";
 
@@ -32,6 +33,9 @@ function Router() {
       </Route>
       <Route path="/dashboard">
         {user ? <Dashboard /> : <Home />}
+      </Route>
+      <Route path="/databases/new">
+        {user ? <DatabaseForm /> : <Home />}
       </Route>
       <Route component={NotFound} />
     </Switch>

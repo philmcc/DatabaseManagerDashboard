@@ -32,7 +32,7 @@ export default function DatabaseForm() {
   const isEditMode = params.id != null;
 
   const { data: existingDatabase, isLoading: isLoadingDatabase } = useQuery<SelectDatabaseConnection>({
-    queryKey: ['/api/databases', params.id],
+    queryKey: [`/api/databases/${params.id}`],
     enabled: isEditMode,
   });
 
@@ -40,14 +40,20 @@ export default function DatabaseForm() {
     resolver: zodResolver(formSchema),
     defaultValues: {
       port: 5432, // Default PostgreSQL port
-      ...existingDatabase,
     },
   });
 
   // Update form values when existing database data is loaded
   React.useEffect(() => {
     if (existingDatabase) {
-      form.reset(existingDatabase);
+      form.reset({
+        name: existingDatabase.name,
+        host: existingDatabase.host,
+        port: existingDatabase.port,
+        username: existingDatabase.username,
+        password: existingDatabase.password,
+        databaseName: existingDatabase.databaseName,
+      });
     }
   }, [existingDatabase, form]);
 

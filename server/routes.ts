@@ -776,10 +776,14 @@ export function registerRoutes(app: Express): Server {
       const { id } = req.params;
       const timeRange = req.query.timeRange || '1h'; // Default to last hour
 
-      // Get database connection details
+      // Get database connection details with instance
       const [dbConnection] = await db
-        .select()
+        .select({
+          database: databaseConnections,
+          instance: instances,
+        })
         .from(databaseConnections)
+        .leftJoin(instances, eq(instances.id, databaseConnections.instanceId))
         .where(
           and(
             eq(databaseConnections.id, parseInt(id)),
@@ -792,13 +796,17 @@ export function registerRoutes(app: Express): Server {
         return res.status(404).send("Database connection not found");
       }
 
+      if (!dbConnection.instance) {
+        return res.status(404).send("Instance not found");
+      }
+
       // Connect to the database to collect metrics
       const client = new Client({
-        host: dbConnection.host,
-        port: dbConnection.port,
-        user: dbConnection.username,
-        password: dbConnection.password,
-        database: dbConnection.databaseName,
+        host: dbConnection.instance.hostname,
+        port: dbConnection.instance.port,
+        user: dbConnection.database.username,
+        password: dbConnection.database.password,
+        database: dbConnection.database.databaseName,
         ssl: { rejectUnauthorized: false }
       });
 

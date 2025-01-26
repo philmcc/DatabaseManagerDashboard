@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { setupAuth } from "./auth";
 import { db } from "@db";
 import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics, clusters, instances } from "@db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, ne } from "drizzle-orm";
 import pkg from 'pg';
 const { Client } = pkg;
 import { sql } from 'drizzle-orm';
@@ -774,6 +774,111 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
+
+  // Add instance creation route
+  app.post("/api/clusters/:clusterId/instances", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { clusterId } = req.params;
+      const { hostname, port, username, password, description, isWriter, defaultDatabaseName } = req.body;
+
+      // Test connection first
+      const client = new Client({
+        host: hostname,
+        port,
+        user: username,
+        password,
+        database: defaultDatabaseName || 'postgres',
+      });
+
+      try {
+        await client.connect();
+        await client.end();
+      } catch (error: any) {
+        return res.status(400).json({
+          message: "Failed to connect to database instance",
+          error: error.message,
+        });
+      }
+
+      // If connection test passed, create the instance
+      const [newInstance] = await db
+        .insert(instances)
+        .values({
+          hostname,
+          port,
+          username,
+          password,
+          description,
+          isWriter,
+          defaultDatabaseName,
+          clusterId: parseInt(clusterId),
+          userId: req.user.id,
+        })
+        .returning();
+
+      // If this is a writer instance, update other instances in the cluster to be readers
+      if (isWriter) {
+        await db
+          .update(instances)
+          .set({ isWriter: false })
+          .where(
+            and(
+              eq(instances.clusterId, parseInt(clusterId)),
+              ne(instances.id, newInstance.id)
+            )
+          );
+      }
+
+      res.status(201).json(newInstance);
+    } catch (error) {
+      console.error("Instance creation error:", error);
+      res.status(500).json({
+        message: "Error creating instance",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // Add test connection endpoint
+  app.post("/api/instances/test-connection", async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { hostname, port, username, password, defaultDatabaseName } = req.body;
+
+      const client = new Client({
+        host: hostname,
+        port,
+        user: username,
+        password,
+        database: defaultDatabaseName || 'postgres',
+      });
+
+      try {
+        await client.connect();
+        await client.end();
+        res.json({ success: true, message: "Connection successful" });
+      } catch (error: any) {
+        res.status(400).json({
+          success: false,
+          message: "Connection failed",
+          error: error.message,
+        });
+      }
+    } catch (error) {
+      console.error("Connection test error:", error);
+      res.status(500).json({
+        message: "Error testing connection",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
 
   const httpServer = createServer(app);
   return httpServer;

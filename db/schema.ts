@@ -28,6 +28,9 @@ export const clusters = pgTable("clusters", {
 export const instances = pgTable("instances", {
   id: serial("id").primaryKey(),
   hostname: text("hostname").notNull(),
+  port: integer("port").notNull(),
+  username: text("username").notNull(),
+  password: text("password").notNull(),
   description: text("description"),
   isWriter: boolean("is_writer").default(false),
   defaultDatabaseName: text("default_database_name"),

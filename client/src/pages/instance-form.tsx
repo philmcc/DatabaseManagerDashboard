@@ -25,6 +25,9 @@ import Navbar from "@/components/layout/navbar";
 
 const instanceSchema = z.object({
   hostname: z.string().min(1, "Hostname is required"),
+  port: z.number().int().min(1, "Port is required"),
+  username: z.string().min(1, "Username is required"),
+  password: z.string().min(1, "Password is required"),
   description: z.string().optional(),
   isWriter: z.boolean().default(false),
   defaultDatabaseName: z.string().optional(),
@@ -53,6 +56,9 @@ function InstanceForm() {
     resolver: zodResolver(instanceSchema),
     defaultValues: {
       hostname: "",
+      port: 5432,
+      username: "",
+      password: "",
       description: "",
       isWriter: false,
       defaultDatabaseName: "",
@@ -63,12 +69,45 @@ function InstanceForm() {
     if (instance) {
       form.reset({
         hostname: instance.hostname,
+        port: instance.port,
+        username: instance.username,
+        password: instance.password,
         description: instance.description || "",
         isWriter: instance.isWriter || false,
         defaultDatabaseName: instance.defaultDatabaseName || "",
       });
     }
   }, [instance, form]);
+
+  const testConnection = useMutation({
+    mutationFn: async (values: FormData) => {
+      const response = await fetch(`/api/instances/test-connection`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(values),
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: "Success",
+        description: "Connection test successful",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Connection Failed",
+        description: error.message,
+      });
+    },
+  });
 
   const mutation = useMutation({
     mutationFn: async (values: FormData) => {
@@ -84,7 +123,8 @@ function InstanceForm() {
       });
 
       if (!response.ok) {
-        throw new Error(await response.text());
+        const text = await response.text();
+        throw new Error(text);
       }
 
       return response.json();
@@ -121,6 +161,11 @@ function InstanceForm() {
     mutation.mutate(data);
   };
 
+  const handleTestConnection = () => {
+    const values = form.getValues();
+    testConnection.mutate(values);
+  };
+
   return (
     <div>
       <Navbar />
@@ -147,6 +192,62 @@ function InstanceForm() {
                         </FormControl>
                         <FormDescription>
                           The hostname or IP address of the database instance
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="port"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Port</FormLabel>
+                        <FormControl>
+                          <Input 
+                            type="number" 
+                            placeholder="5432" 
+                            {...field}
+                            onChange={(e) => field.onChange(parseInt(e.target.value, 10))}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          The port number for the PostgreSQL instance (default: 5432)
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="username"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Username</FormLabel>
+                        <FormControl>
+                          <Input placeholder="postgres" {...field} />
+                        </FormControl>
+                        <FormDescription>
+                          Database user with access to this instance
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="password"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Password</FormLabel>
+                        <FormControl>
+                          <Input type="password" placeholder="••••••••" {...field} />
+                        </FormControl>
+                        <FormDescription>
+                          Password for the database user
                         </FormDescription>
                         <FormMessage />
                       </FormItem>
@@ -211,17 +312,41 @@ function InstanceForm() {
                     )}
                   />
 
-                  <div className="flex justify-end gap-4">
+                  <div className="flex justify-between gap-4">
                     <Button
                       type="button"
                       variant="outline"
-                      onClick={() => navigate(`/clusters/${params.clusterId}`)}
+                      onClick={handleTestConnection}
+                      disabled={testConnection.isPending}
                     >
-                      Cancel
+                      {testConnection.isPending ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Testing...
+                        </>
+                      ) : (
+                        'Test Connection'
+                      )}
                     </Button>
-                    <Button type="submit">
-                      {isEditing ? "Update Instance" : "Create Instance"}
-                    </Button>
+                    <div className="flex gap-4">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => navigate(`/clusters/${params.clusterId}`)}
+                      >
+                        Cancel
+                      </Button>
+                      <Button type="submit" disabled={mutation.isPending}>
+                        {mutation.isPending ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            {isEditing ? "Updating..." : "Creating..."}
+                          </>
+                        ) : (
+                          isEditing ? "Update Instance" : "Create Instance"
+                        )}
+                      </Button>
+                    </div>
                   </div>
                 </form>
               </Form>

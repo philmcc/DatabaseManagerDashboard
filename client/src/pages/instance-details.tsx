@@ -57,12 +57,14 @@ function InstanceDetails() {
           <Server className="h-8 w-8" />
           {instance.hostname}
         </h1>
-        <Button asChild>
-          <Link href={`/clusters/${instance.cluster.id}/instances/${instance.id}/edit`}>
-            <Edit2 className="mr-2 h-4 w-4" />
-            Edit Instance
-          </Link>
-        </Button>
+        {instance.cluster && (
+          <Button asChild>
+            <Link href={`/clusters/${instance.cluster.id}/instances/${instance.id}/edit`}>
+              <Edit2 className="mr-2 h-4 w-4" />
+              Edit Instance
+            </Link>
+          </Button>
+        )}
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">
@@ -71,12 +73,14 @@ function InstanceDetails() {
             <CardTitle>Instance Details</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div>
-              <h3 className="font-medium">Cluster</h3>
-              <Link href={`/clusters/${instance.cluster.id}`} className="text-primary hover:underline">
-                {instance.cluster.name}
-              </Link>
-            </div>
+            {instance.cluster && (
+              <div>
+                <h3 className="font-medium">Cluster</h3>
+                <Link href={`/clusters/${instance.cluster.id}`} className="text-primary hover:underline">
+                  {instance.cluster.name}
+                </Link>
+              </div>
+            )}
             <div>
               <h3 className="font-medium">Role</h3>
               <Badge variant={instance.isWriter ? "default" : "secondary"}>

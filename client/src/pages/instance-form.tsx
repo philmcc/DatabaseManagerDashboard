@@ -35,6 +35,16 @@ const instanceSchema = z.object({
 
 type FormData = z.infer<typeof instanceSchema>;
 
+const defaultFormValues: FormData = {
+  hostname: "",
+  port: 5432,
+  username: "",
+  password: "",
+  description: "",
+  isWriter: false,
+  defaultDatabaseName: "",
+};
+
 function InstanceForm() {
   const [_, navigate] = useLocation();
   const params = useParams<{ id?: string; clusterId: string }>();
@@ -54,20 +64,12 @@ function InstanceForm() {
 
   const form = useForm<FormData>({
     resolver: zodResolver(instanceSchema),
-    defaultValues: {
-      hostname: "",
-      port: 5432,
-      username: "",
-      password: "",
-      description: "",
-      isWriter: false,
-      defaultDatabaseName: "",
-    },
+    defaultValues: defaultFormValues,
   });
 
-  // Update form values when existing instance data is loaded
+  // Update form values only when editing and instance data is loaded
   React.useEffect(() => {
-    if (instance) {
+    if (isEditing && instance) {
       form.reset({
         hostname: instance.hostname,
         port: instance.port,
@@ -78,7 +80,7 @@ function InstanceForm() {
         defaultDatabaseName: instance.defaultDatabaseName || "",
       });
     }
-  }, [instance, form]);
+  }, [instance, form, isEditing]);
 
   const testConnection = useMutation({
     mutationFn: async (values: FormData) => {

@@ -2,8 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useLocation, useParams } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2 } from "lucide-react";
-import type { SelectCluster } from "@db/schema";
+import { Loader2, PlusCircle } from "lucide-react";
+import type { SelectCluster, SelectInstance } from "@db/schema";
 import Navbar from "@/components/layout/navbar";
 
 function ClusterDetails() {
@@ -90,6 +90,57 @@ function ClusterDetails() {
             )}
           </CardContent>
         </Card>
+
+        <div className="flex justify-between items-center">
+          <h2 className="text-2xl font-bold">Instances</h2>
+          <Button asChild>
+            <a href={`/clusters/${params.id}/instances/new`}>
+              <PlusCircle className="mr-2 h-4 w-4" />
+              Add Instance
+            </a>
+          </Button>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {cluster.instances?.map((instance: SelectInstance) => (
+            <Card key={instance.id} className="hover:bg-accent/50 transition-colors">
+              <CardHeader 
+                className="cursor-pointer" 
+                onClick={() => navigate(`/clusters/${params.id}/instances/${instance.id}`)}
+              >
+                <CardTitle className="flex justify-between items-center">
+                  <span>{instance.hostname}</span>
+                </CardTitle>
+                {instance.description && (
+                  <p className="text-sm text-muted-foreground">{instance.description}</p>
+                )}
+              </CardHeader>
+              <CardContent>
+                <div className="flex gap-2">
+                  {instance.isWriter && (
+                    <span className="px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">
+                      Writer
+                    </span>
+                  )}
+                  {!instance.isWriter && (
+                    <span className="px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800">
+                      Reader
+                    </span>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+          {!cluster.instances?.length && (
+            <Card className="col-span-full">
+              <CardContent className="py-8">
+                <div className="text-center text-muted-foreground">
+                  <p>No instances found. Add your first instance to get started.</p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -7,30 +7,37 @@ import { Settings, LogOut, Database } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import BaseLayout from "@/components/layout/base-layout";
 import { SelectDatabaseConnection } from "@db/schema";
+import { useState } from "react";
 
 export default function Dashboard() {
   const { user, logout } = useUser();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const [testingDatabaseId, setTestingDatabaseId] = useState<number | null>(null);
 
   const { data: databases = [], isLoading } = useQuery<SelectDatabaseConnection[]>({
     queryKey: ['/api/databases'],
     enabled: !!user,
   });
 
-  const { mutate: testConnection, isPending: isTestingConnection } = useMutation({
+  const { mutate: testConnection } = useMutation({
     mutationFn: async (databaseId: number) => {
-      const res = await fetch(`/api/databases/${databaseId}/test`, {
-        method: 'POST',
-        credentials: 'include',
-      });
+      setTestingDatabaseId(databaseId);
+      try {
+        const res = await fetch(`/api/databases/${databaseId}/test`, {
+          method: 'POST',
+          credentials: 'include',
+        });
 
-      if (!res.ok) {
-        const error = await res.text();
-        throw new Error(error);
+        if (!res.ok) {
+          const error = await res.text();
+          throw new Error(error);
+        }
+
+        return res.json();
+      } finally {
+        setTestingDatabaseId(null);
       }
-
-      return res.json();
     },
     onSuccess: (data) => {
       toast({
@@ -135,10 +142,10 @@ export default function Dashboard() {
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={isTestingConnection}
+                      disabled={testingDatabaseId === db.id}
                       onClick={() => testConnection(db.id)}
                     >
-                      {isTestingConnection ? "Testing..." : "Test Connection"}
+                      {testingDatabaseId === db.id ? "Testing..." : "Test Connection"}
                     </Button>
                   </div>
                 </CardContent>

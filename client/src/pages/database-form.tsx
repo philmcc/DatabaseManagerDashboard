@@ -10,8 +10,9 @@ import { useLocation, useParams } from "wouter";
 import BaseLayout from "@/components/layout/base-layout";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Database } from "lucide-react";
-import { SelectDatabaseConnection } from "@db/schema";
+import { SelectDatabaseConnection, SelectTag } from "@db/schema";
 import { useEffect } from "react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const formSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -20,6 +21,7 @@ const formSchema = z.object({
   username: z.string().min(1, "Username is required"),
   password: z.string().min(1, "Password is required"),
   databaseName: z.string().min(1, "Database name is required"),
+  tags: z.array(z.coerce.number()).default([]),
 });
 
 type FormData = z.infer<typeof formSchema>;
@@ -36,10 +38,15 @@ export default function DatabaseForm() {
     enabled: isEditMode,
   });
 
+  const { data: tags = [] } = useQuery<SelectTag[]>({
+    queryKey: ['/api/tags'],
+  });
+
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       port: 5432, // Default PostgreSQL port
+      tags: [],
     },
   });
 
@@ -53,6 +60,7 @@ export default function DatabaseForm() {
         username: existingDatabase.username,
         password: existingDatabase.password,
         databaseName: existingDatabase.databaseName,
+        tags: existingDatabase.tags?.map(t => t.tagId) || [],
       });
     }
   }, [existingDatabase, form]);
@@ -230,6 +238,64 @@ export default function DatabaseForm() {
                       <FormControl>
                         <Input {...field} />
                       </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="tags"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Tags</FormLabel>
+                      <Select
+                        onValueChange={(value) => {
+                          const currentTags = field.value || [];
+                          const tagId = parseInt(value);
+                          if (!currentTags.includes(tagId)) {
+                            field.onChange([...currentTags, tagId]);
+                          }
+                        }}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select tags" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {tags.map((tag) => (
+                            <SelectItem key={tag.id} value={tag.id.toString()}>
+                              {tag.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {field.value?.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          {field.value.map((tagId) => {
+                            const tag = tags.find(t => t.id === tagId);
+                            if (!tag) return null;
+                            return (
+                              <div
+                                key={tag.id}
+                                className="bg-secondary text-secondary-foreground px-2 py-1 rounded-md text-sm flex items-center gap-2"
+                              >
+                                {tag.name}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    field.onChange(field.value.filter(id => id !== tagId));
+                                  }}
+                                  className="hover:text-destructive"
+                                >
+                                  ×
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                       <FormMessage />
                     </FormItem>
                   )}

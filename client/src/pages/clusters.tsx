@@ -10,8 +10,8 @@ function ClustersPage() {
   const [location, navigate] = useLocation();
   const { data: clusters, isLoading } = useQuery({
     queryKey: ['/api/clusters'],
-    queryFn: async ({ queryKey }) => {
-      const response = await fetch(queryKey[0]);
+    queryFn: async ({ queryKey: [url] }) => {
+      const response = await fetch(url);
       if (!response.ok) {
         throw new Error('Failed to fetch clusters');
       }

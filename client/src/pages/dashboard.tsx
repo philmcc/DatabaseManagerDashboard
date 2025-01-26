@@ -10,6 +10,20 @@ import { SelectDatabaseConnection, SelectDatabaseOperationLog } from "@db/schema
 import { useState } from "react";
 import { format } from "date-fns";
 
+interface LogDetails {
+  before?: Record<string, any>;
+  after?: Record<string, any>;
+  error?: string;
+}
+
+interface DatabaseLog extends SelectDatabaseOperationLog {
+  user?: {
+    username: string;
+    fullName: string | null;
+  };
+  details: LogDetails;
+}
+
 export default function Dashboard() {
   const { user, logout } = useUser();
   const [, setLocation] = useLocation();
@@ -22,7 +36,7 @@ export default function Dashboard() {
     enabled: !!user,
   });
 
-  const { data: logs = [], isLoading: isLoadingLogs } = useQuery<SelectDatabaseOperationLog[]>({
+  const { data: logs = [], isLoading: isLoadingLogs } = useQuery<DatabaseLog[]>({
     queryKey: ['/api/database-logs'],
     enabled: !!user,
   });
@@ -200,21 +214,42 @@ export default function Dashboard() {
                               </span>
                             </p>
                             <p className="text-sm text-muted-foreground">
-                              {format(new Date(log.timestamp), 'PPpp')}
+                              {log.timestamp ? format(new Date(log.timestamp), 'PPpp') : 'Timestamp not available'}
                             </p>
                           </div>
                         </div>
-                        {log.details && typeof log.details === 'object' && (
-                          <div className="text-sm text-muted-foreground bg-slate-50 p-2 rounded">
-                            {log.details.name && <p>Database: {log.details.name}</p>}
-                            {log.details.host && log.details.port && (
-                              <p>Host: {log.details.host}:{log.details.port}</p>
-                            )}
-                            {log.details.error && (
-                              <p className="text-red-500">Error: {log.details.error}</p>
-                            )}
-                          </div>
-                        )}
+                        <div className="text-sm text-muted-foreground bg-slate-50 p-2 rounded">
+                          {log.user && (
+                            <p className="font-medium mb-1">
+                              By: {log.user.fullName || log.user.username}
+                            </p>
+                          )}
+                          {log.details.before && log.details.after && (
+                            <>
+                              <div className="mt-1">
+                                <p className="font-medium text-xs uppercase text-gray-500">Changes:</p>
+                                {Object.keys(log.details.before).map(key => {
+                                  const beforeVal = log.details.before?.[key];
+                                  const afterVal = log.details.after?.[key];
+                                  if (beforeVal !== afterVal) {
+                                    return (
+                                      <p key={key} className="ml-2">
+                                        <span className="font-medium">{key}:</span>{' '}
+                                        <span className="text-red-500">{beforeVal}</span>{' '}
+                                        <span className="text-gray-500">→</span>{' '}
+                                        <span className="text-green-500">{afterVal}</span>
+                                      </p>
+                                    );
+                                  }
+                                  return null;
+                                })}
+                              </div>
+                            </>
+                          )}
+                          {log.details.error && (
+                            <p className="text-red-500">Error: {log.details.error}</p>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ))}

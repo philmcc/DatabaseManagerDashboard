@@ -184,6 +184,22 @@ export function registerRoutes(app: Express): Server {
       const { id } = req.params;
       const { name, host, port, username, password, databaseName, tags: tagIds } = req.body;
 
+      // Get existing database details before update
+      const [existingDatabase] = await db
+        .select()
+        .from(databaseConnections)
+        .where(
+          and(
+            eq(databaseConnections.id, parseInt(id)),
+            eq(databaseConnections.userId, req.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!existingDatabase) {
+        return res.status(404).send("Database not found");
+      }
+
       // Test connection first
       const client = new Client({
         host,
@@ -205,7 +221,20 @@ export function registerRoutes(app: Express): Server {
           operationResult: 'failure',
           details: {
             error: error.message,
-            connectionDetails: { name, host, port, username, databaseName }
+            before: {
+              name: existingDatabase.name,
+              host: existingDatabase.host,
+              port: existingDatabase.port,
+              username: existingDatabase.username,
+              databaseName: existingDatabase.databaseName
+            },
+            attempted: {
+              name,
+              host,
+              port,
+              username,
+              databaseName
+            }
           },
         });
 
@@ -235,10 +264,6 @@ export function registerRoutes(app: Express): Server {
         )
         .returning();
 
-      if (!updatedDatabase) {
-        return res.status(404).send("Database not found");
-      }
-
       // Update tags if provided
       if (tagIds) {
         await db
@@ -255,17 +280,27 @@ export function registerRoutes(app: Express): Server {
         }
       }
 
-      // Log successful update
+      // Log successful update with before/after values
       await db.insert(databaseOperationLogs).values({
         databaseId: updatedDatabase.id,
         userId: req.user.id,
         operationType: 'update',
         operationResult: 'success',
         details: {
-          name: updatedDatabase.name,
-          host: updatedDatabase.host,
-          port: updatedDatabase.port,
-          databaseName: updatedDatabase.databaseName,
+          before: {
+            name: existingDatabase.name,
+            host: existingDatabase.host,
+            port: existingDatabase.port,
+            username: existingDatabase.username,
+            databaseName: existingDatabase.databaseName
+          },
+          after: {
+            name: updatedDatabase.name,
+            host: updatedDatabase.host,
+            port: updatedDatabase.port,
+            username: updatedDatabase.username,
+            databaseName: updatedDatabase.databaseName
+          }
         },
       });
 
@@ -406,7 +441,12 @@ export function registerRoutes(app: Express): Server {
       const logs = await db.query.databaseOperationLogs.findMany({
         with: {
           database: true,
-          user: true,
+          user: {
+            columns: {
+              username: true,
+              fullName: true
+            }
+          },
         },
         orderBy: (logs, { desc }) => [desc(logs.timestamp)],
         limit: 100,

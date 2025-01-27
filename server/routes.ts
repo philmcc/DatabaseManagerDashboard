@@ -54,7 +54,7 @@ export function registerRoutes(app: Express): Server {
           }
         })
         .from(users)
-        .leftJoin(users.as('approver'), eq(users.approvedBy, sql`approver.id`));
+        .leftJoin(users, 'approver', eq(users.approvedBy, sql`approver.id`));
 
       res.json(allUsers);
     } catch (error) {
@@ -1046,8 +1046,7 @@ export function registerRoutes(app: Express): Server {
           message: "Error collecting database metrics",
           error: error.message
         });
-      } finally {
-        if (client) {
+      } finally {        if (client) {
           try {
             await client.end();
           } catch (e) {

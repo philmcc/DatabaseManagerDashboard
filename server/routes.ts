@@ -185,7 +185,7 @@ export function registerRoutes(app: Express): Server {
 
       // Apply filters based on user role
       if (req.user.role !== 'ADMIN') {
-        query.where(eq(databaseConnections.userId, req.user.id));
+        query.where = eq(databaseConnections.userId, req.user.id);
       }
 
       const userDatabases = await query;
@@ -237,7 +237,7 @@ export function registerRoutes(app: Express): Server {
 
       // Apply additional filters for non-admin users
       if (req.user.role !== 'ADMIN') {
-        query.where(eq(databaseConnections.userId, req.user.id));
+        query.where = and(eq(databaseConnections.id, parseInt(id)), eq(databaseConnections.userId, req.user.id));
       }
 
       const database = await query;
@@ -906,10 +906,17 @@ export function registerRoutes(app: Express): Server {
       const tagId = req.query.tagId ? parseInt(req.query.tagId as string) : undefined;
 
       // Build where conditions
-      let whereConditions = [eq(databaseOperationLogs.userId, req.user.id)];
+      let whereConditions = [];
+
+      // Only filter by user ID for non-admin users
+      if (req.user.role !== 'ADMIN') {
+        whereConditions.push(eq(databaseOperationLogs.userId, req.user.id));
+      }
+
       if (databaseId) {
         whereConditions.push(eq(databaseOperationLogs.databaseId, databaseId));
       }
+
       if (tagId) {
         // Get all database IDs that have the selected tag
         const databasesWithTag = db
@@ -922,11 +929,13 @@ export function registerRoutes(app: Express): Server {
         );
       }
 
+      const finalWhere = whereConditions.length > 0 ? and(...whereConditions) : undefined;
+
       // Get total count for pagination with filters
       const [{ count }] = await db
         .select({ count: sql`count(*)::integer` })
         .from(databaseOperationLogs)
-        .where(and(...whereConditions));
+        .where(finalWhere || sql`true`);
 
       const logs = await db.query.databaseOperationLogs.findMany({
         with: {
@@ -938,7 +947,7 @@ export function registerRoutes(app: Express): Server {
             }
           },
         },
-        where: and(...whereConditions),
+        where: finalWhere,
         orderBy: (logs, { desc }) => [desc(logs.timestamp)],
         limit: pageSize,
         offset: offset,

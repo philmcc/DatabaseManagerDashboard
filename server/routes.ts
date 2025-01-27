@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { setupAuth } from "./auth";
 import { db } from "@db";
 import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics, clusters, instances } from "@db/schema";
-import { eq, and, ne, sql } from "drizzle-orm";
+import { eq, and, ne, sql, desc } from "drizzle-orm";
 import pkg from 'pg';
 const { Client } = pkg;
 
@@ -994,155 +994,605 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
+  // Update metrics endpoint with proper access control
   app.get("/api/databases/:id/metrics", requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const parsedId = parseInt(id);
+
+      // Get database connection details with instance
+      const dbConnection = await db.query.databaseConnections.findFirst({
+        where: req.user.role === 'ADMIN'
+          ? eq(databaseConnections.id, parsedId)
+          : and(
+              eq(databaseConnections.id, parsedId),
+              eq(databaseConnections.userId, req.user.id)
+            ),
+        with: {
+          instance: true,
+        },
+      });
+
+      if (!dbConnection) {
+        return res.status(404).send("Database connection not found or you don't have access to it");
+      }
+
+      const instance = dbConnection.instance;
+      if (!instance) {
+        return res.status(404).send("Associated instance not found");
+      }
+
+      // Get the latest metrics
+      const latestMetrics = await db
+        .select()
+        .from(databaseMetrics)
+        .where(eq(databaseMetrics.databaseId, parsedId))
+        .orderBy(desc(databaseMetrics.timestamp))
+        .limit(1);
+
+      // If no metrics exist yet, collect them
+      if (!latestMetrics.length) {
+        const client = new Client({
+          host: instance.hostname,
+          port: instance.port,
+          user: dbConnection.username,
+          password: dbConnection.password,
+          database: dbConnection.databaseName,
+          ssl: { rejectUnauthorized: false }
+        });
+
+        try {
+          await client.connect();
+
+          const metrics: any = {};
+
+          // Get active connections
+          const connectionsResult = await client.query(
+            "SELECT count(*) as count FROM pg_stat_activity WHERE state = 'active'"
+          );
+          metrics.activeConnections = parseInt(connectionsResult.rows[0].count);
+
+          // Get database size
+          const sizeResult = await client.query(
+            "SELECT pg_database_size($1) as size",
+            [dbConnection.databaseName]
+          );
+          metrics.databaseSize = parseInt(sizeResult.rows[0].size);
+
+          // Get slow queries (queries taking more than 1000ms)
+          const slowQueriesResult = await client.query(
+            "SELECT count(*) as count FROM pg_stat_activity WHERE state = 'active' AND now() - query_start > interval '1 second'"
+          );
+          metrics.slowQueries = parseInt(slowQueriesResult.rows[0].count);
+
+          // Get cache hit ratio
+          const cacheResult = await client.query(`
+            SELECT
+              sum(heap_blks_hit) / (sum(heap_blks_hit) + sum(heap_blks_read)) as ratio
+            FROM pg_statio_user_tables
+            WHERE (heap_blks_hit) + sum(heap_blks_read) > 0
+          `);
+          metrics.cacheHitRatio = parseFloat(cacheResult.rows[0].ratio || 0);
+
+          // Get average query time
+          const avgTimeResult = await client.query(`
+            SELECT avg(total_exec_time) as avg_time
+            FROM pg_stat_statements
+            WHERE calls > 0
+          `);
+          metrics.avgQueryTime = parseFloat(avgTimeResult.rows[0].avg_time || 0);
+
+          await client.end();
+
+          // Store the metrics
+          const [newMetrics] = await db
+            .insert(databaseMetrics)
+            .values({
+              databaseId: parsedId,
+              activeConnections: metrics.activeConnections,
+              databaseSize: metrics.databaseSize.toString(),
+              slowQueries: metrics.slowQueries,
+              avgQueryTime: metrics.avgQueryTime.toString(),
+              cacheHitRatio: metrics.cacheHitRatio.toString(),
+              metrics: metrics,
+            })
+            .returning();
+
+          res.json(newMetrics);
+        } catch (error: any) {
+          console.error("Metrics collection error:", error);
+          res.status(500).json({
+            message: "Failed to collect metrics",
+            error: error.message
+          });
+        }
+      } else {
+        res.json(latestMetrics[0]);
+      }
+    } catch (error) {
+      console.error("Metrics fetch error:", error);
+      res.status(500).send("Error fetching metrics");
+    }
+  });
+
+  // Add instance list endpoint
+  app.get("/api/instances", requireAuth, async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      // For admin users, show all instances
+      // For other users, show only their own instances
+      const where = req.user.role === 'ADMIN'
+        ? undefined
+        : eq(instances.userId, req.user.id);
+
+      const userInstances = await db.query.instances.findMany({
+        where,
+        with: {
+          cluster: true,
+        },
+      });
+
+      res.json(userInstances);
+    } catch (error) {
+      console.error("Instances fetch error:", error);
+      res.status(500).send("Error fetching instances");
+    }
+  });
+
+  // Add instance creation route
+  app.post("/api/clusters/:clusterId/instances", requireWriterOrAdmin, async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { clusterId } = req.params;
+      const { hostname, port, username, password, description, isWriter, defaultDatabaseName } = req.body;
+
+      // Test connection first
+      const client = new Client({
+        host: hostname,
+        port,
+        user: username,
+        password,
+        database: defaultDatabaseName || 'postgres',
+        ssl: { rejectUnauthorized: false }
+      });
+
+      try {
+        await client.connect();
+        await client.end();
+      } catch (error: any) {
+        return res.status(400).json({
+          message: "Failed to connect to database instance",
+          error: error.message,
+        });
+      }
+
+      // If connection test passed, create the instance
+      const [newInstance] = await db
+        .insert(instances)
+        .values({
+          hostname,
+          port,
+          username,
+          password,
+          description,
+          isWriter,
+          defaultDatabaseName,
+          clusterId: parseInt(clusterId),
+          userId: req.user.id,
+        })
+        .returning();
+
+      // If this is a writer instance, update other instances in the cluster to be readers
+      if (isWriter) {
+        await db
+          .update(instances)
+          .set({ isWriter: false })
+          .where(
+            and(
+              eq(instances.clusterId, parseInt(clusterId)),
+              ne(instances.id, newInstance.id)
+            )
+          );
+      }
+
+      res.json(newInstance);
+    } catch (error) {
+      console.error("Instance creation error:", error);
+      res.status(500).json({
+        message: "Error creating instance",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // Add instance update endpoint
+  app.patch("/api/instances/:id", requireWriterOrAdmin, async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
 
     try {
       const { id } = req.params;
-      const timeRange = req.query.timeRange || '1h'; // Default to last hour
+      const { hostname, port, username, password, description, isWriter, defaultDatabaseName } = req.body;
 
-      // Get database connection details with instance
-      const [dbConnection] = await db
-        .select({
-          database: databaseConnections,
-          instance: instances,
-        })
-        .from(databaseConnections)
-        .leftJoin(instances, eq(instances.id, databaseConnections.instanceId))
+      // Get existing instance
+      const [existingInstance] = await db
+        .select()
+        .from(instances)
         .where(
           and(
-            eq(databaseConnections.id, parseInt(id)),
-            eq(databaseConnections.userId, req.user.id)
+            eq(instances.id, parseInt(id)),
+            eq(instances.userId, req.user.id)
           )
         )
         .limit(1);
 
-      if (!dbConnection) {
-        return res.status(404).send("Database connection not found");
-      }
-
-      if (!dbConnection.instance) {
+      if (!existingInstance) {
         return res.status(404).send("Instance not found");
       }
 
-      // Connect to the database to collect metrics
+      // Test connection first
       const client = new Client({
-        host: dbConnection.instance.hostname,
-        port: dbConnection.instance.port,
-        user: dbConnection.database.username,
-        password: dbConnection.database.password,
-        database: dbConnection.database.databaseName,
+        host: hostname,
+        port,
+        user: username,
+        password,
+        database: defaultDatabaseName || 'postgres',
         ssl: { rejectUnauthorized: false }
       });
 
       try {
         await client.connect();
-
-        // Collect various metrics
-        const metrics = {
-          activeConnections: 0,
-          databaseSize: 0,
-          slowQueries: 0,
-          avgQueryTime: 0,
-          cacheHitRatio: 0,
-          tableStats: [],
-        };
-
-        // Get active connections
-        const activeConnectionsResult = await client.query(
-          "SELECT count(*) as count FROM pg_stat_activity WHERE state = 'active'"
-        );
-        metrics.activeConnections = parseInt(activeConnectionsResult.rows[0].count);
-
-        // Get database size
-        const dbSizeResult = await client.query(
-          "SELECT pg_database_size(current_database()) / 1024.0 / 1024.0 as size_mb"
-        );
-        metrics.databaseSize = parseFloat(dbSizeResult.rows[0].size_mb);
-
-        // Get slow queries (queries taking more than 1000ms)
-        const slowQueriesResult = await client.query(
-          "SELECT count(*) as count FROM pg_stat_activity WHERE state = 'active' AND now() - query_start > interval '1 second'"
-        );
-        metrics.slowQueries = parseInt(slowQueriesResult.rows[0].count);
-
-        // Get cache hit ratio
-        const cacheHitResult = await client.query(`
-          SELECT 
-            CASE 
-              WHEN sum(heap_blks_hit) + sum(heap_blks_read) = 0 THEN 0
-              ELSE sum(heap_blks_hit)::float / (sum(heap_blks_hit) + sum(heap_blks_read))
-            END as ratio
-          FROM pg_statio_user_tables
-        `);
-        metrics.cacheHitRatio = parseFloat(cacheHitResult.rows[0].ratio || 0);
-
-        // Get table statistics
-        const tableStatsResult = await client.query(`
-          SELECT 
-            relname as table_name,
-            n_live_tup as row_count,
-            n_dead_tup as dead_tuples,
-            pg_total_relation_size(relid) / 1024.0 / 1024.0 as size_mb
-          FROM pg_stat_user_tables
-          ORDER BY n_live_tup DESC
-          LIMIT 10
-        `);
-        metrics.tableStats = tableStatsResult.rows;
         await client.end();
+      } catch (error: any) {
+        return res.status(400).json({
+          message: "Failed to connect to database instance",
+          error: error.message,
+        });
+      }
 
-        // Store metrics in our database
-        await db.insert(databaseMetrics).values({
-          databaseId: parseInt(id),
-          activeConnections: metrics.activeConnections,
-          databaseSize: metrics.databaseSize,
-          slowQueries: metrics.slowQueries,
-          avgQueryTime: 0, // We'll calculate this in a future update
-          cacheHitRatio: metrics.cacheHitRatio,
-          metrics: metrics,
-        });        // Get historical metrics
-        const timeFilter = timeRange === '24h'
-          ? sql`interval '24 hours'`
-          : timeRange === '7d'
-            ? sql`interval '7 days'`
-            : sql`interval '1 hour'`;
+      // Update the instance
+      const [updatedInstance] = await db
+        .update(instances)
+        .set({
+          hostname,
+          port,
+          username,
+          password,
+          description,
+          isWriter,
+          defaultDatabaseName,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(instances.id, parseInt(id)),
+            eq(instances.userId, req.user.id)
+          )
+        )
+        .returning();
 
-        const historicalMetrics = await db
-          .select()
-          .from(databaseMetrics)
+      // If this instance is set as writer, update other instances in the cluster to be readers
+      if (isWriter) {
+        await db
+          .update(instances)
+          .set({ isWriter: false })
           .where(
             and(
-              eq(databaseMetrics.databaseId, parseInt(id)),
-              sql`${databaseMetrics.timestamp} >= now() - ${timeFilter}`
+              eq(instances.clusterId, updatedInstance.clusterId),
+              ne(instances.id, updatedInstance.id)
             )
-          )
-          .orderBy(databaseMetrics.timestamp);
+          );
+      }
 
-        res.json({
-          current: metrics,
-          historical: historicalMetrics,
-        });
-      } catch (error: any) {
-        console.error("Error collecting metrics:", error);
-        res.status(500).json({
-          message: "Error collecting database metrics",
-          error: error.message
-        });
-      } finally {        if (client) {          try {
-            await client.end();
-          } catch (e) {
-            console.error("Error closing client:", e);
-          }
+      res.json(updatedInstance);
+    } catch (error) {
+      console.error("Instance update error:", error);
+      res.status(500).json({
+        message: "Error updating instance",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // Instance fetch endpoint from edited snippet
+  app.get("/api/instances/:id", requireAuth, async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { id } = req.params;
+      const whereConditions = req.user.role === 'ADMIN'
+        ? eq(instances.id, parseInt(id))
+        : and(
+            eq(instances.id, parseInt(id)),
+            eq(instances.userId, req.user.id)
+          );
+
+      const instance = await db.query.instances.findFirst({
+        where: whereConditions,
+        with: {
+          cluster: true,
+          databases: true,
+        },
+      });
+
+      if (!instance) {
+        return res.status(404).send("Instance not found");
+      }
+
+      res.json(instance);
+    } catch (error) {
+      console.error("Instance fetch error:", error);
+      res.status(500).send("Error fetching instance");
+    }
+  });
+
+
+  // Tags Management Endpoints
+  app.get("/api/tags", requireAuth, async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const userTags = await db
+        .select()
+        .from(tags)
+        .where(eq(tags.userId, req.user.id));
+
+      res.json(userTags);
+    } catch (error) {
+      console.error("Tags fetch error:", error);
+      res.status(500).send("Error fetching tags");
+    }
+  });
+
+  app.post("/api/tags", requireAuth, async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { name } = req.body;
+      const [newTag] = await db
+        .insert(tags)
+        .values({
+          name,
+          userId: req.user.id,
+        })
+        .returning();
+
+      res.status(201).json(newTag);
+    } catch (error) {
+      console.error("Tag creation error:", error);
+      res.status(500).send("Error creating tag");
+    }
+  });
+
+  // Database logs endpoint from edited snippet
+  app.get("/api/database-logs", requireAuth, async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const page = parseInt(req.query.page as string) || 1;
+      const pageSize = parseInt(req.query.pageSize as string) || 100;
+      const offset = (page - 1) * pageSize;
+      const databaseId = req.query.databaseId ? parseInt(req.query.databaseId as string) : undefined;
+      const tagId = req.query.tagId ? parseInt(req.query.tagId as string) : undefined;
+
+      // Get database IDs accessible to the user
+      const userDatabases = await db.select({
+        id: databaseConnections.id
+      })
+        .from(databaseConnections)
+        .where(
+          req.user.role === 'ADMIN'
+            ? undefined
+            : eq(databaseConnections.userId, req.user.id)
+        );
+
+      const userDatabaseIds = userDatabases.map(db => db.id);
+
+      // Build where conditions
+      const conditions = [];
+
+      // Always filter by accessible databases for non-admin users
+      if (req.user.role !== 'ADMIN' && userDatabaseIds.length > 0) {
+        conditions.push(sql`${databaseOperationLogs.databaseId} = ANY(${sql`ARRAY[${sql.join(userDatabaseIds, sql`, `)}]`})`);
+      }
+
+      // Add specific database filter if provided
+      if (databaseId) {
+        conditions.push(eq(databaseOperationLogs.databaseId, databaseId));
+      }
+
+      // Add tag filter if provided
+      if (tagId) {
+        const databasesWithTag = await db
+          .select({ databaseId: databaseTags.databaseId })
+          .from(databaseTags)
+          .where(eq(databaseTags.tagId, tagId));
+
+        const taggedDatabaseIds = databasesWithTag.map(d => d.databaseId);
+        if (taggedDatabaseIds.length > 0) {
+          conditions.push(sql`${databaseOperationLogs.databaseId} = ANY(${sql`ARRAY[${sql.join(taggedDatabaseIds, sql`, `)}]`})`);
         }
       }
-    } catch (error: any) {
-      console.error("Database metrics error:", error);
-      res.status(500).json({
-        message: "Error fetching database metrics",
-        error: error.message,
+
+      // Get total count
+      const totalResult = await db.select({
+        count: sql<number>`COUNT(*)::integer`,
+      })
+        .from(databaseOperationLogs)
+        .where(conditions.length > 0 ? and(...conditions) : undefined);
+
+      const total = totalResult[0]?.count || 0;
+
+      // Get logs with related data
+      const logs = await db.query.databaseOperationLogs.findMany({
+        where: conditions.length > 0 ? and(...conditions) : undefined,
+        with: {
+          database: {
+            columns: {
+              name: true,
+              databaseName: true,
+            },
+            with: {
+              instance: {
+                columns: {
+                  hostname: true,
+                  port: true,
+                },
+              },
+            },
+          },
+          user: {
+            columns: {
+              username: true,
+              fullName: true,
+            },
+          },
+        },
+        orderBy: (logs, { desc }) => [desc(logs.timestamp)],
+        limit: pageSize,
+        offset: offset,
       });
+
+      res.json({ logs, total });
+    } catch (error) {
+      console.error("Database logs fetch error:", error);
+      res.status(500).send("Error fetching database logs");
+    }
+  });
+
+  // Update metrics endpoint with proper access control
+  app.get("/api/databases/:id/metrics", requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const parsedId = parseInt(id);
+
+      // Get database connection details with instance
+      const dbConnection = await db.query.databaseConnections.findFirst({
+        where: req.user.role === 'ADMIN'
+          ? eq(databaseConnections.id, parsedId)
+          : and(
+              eq(databaseConnections.id, parsedId),
+              eq(databaseConnections.userId, req.user.id)
+            ),
+        with: {
+          instance: true,
+        },
+      });
+
+      if (!dbConnection) {
+        return res.status(404).send("Database connection not found or you don't have access to it");
+      }
+
+      const instance = dbConnection.instance;
+      if (!instance) {
+        return res.status(404).send("Associated instance not found");
+      }
+
+      // Get the latest metrics
+      const latestMetrics = await db
+        .select()
+        .from(databaseMetrics)
+        .where(eq(databaseMetrics.databaseId, parsedId))
+        .orderBy(desc(databaseMetrics.timestamp))
+        .limit(1);
+
+      // If no metrics exist yet, collect them
+      if (!latestMetrics.length) {
+        const client = new Client({
+          host: instance.hostname,
+          port: instance.port,
+          user: dbConnection.username,
+          password: dbConnection.password,
+          database: dbConnection.databaseName,
+          ssl: { rejectUnauthorized: false }
+        });
+
+        try {
+          await client.connect();
+
+          const metrics: any = {};
+
+          // Get active connections
+          const connectionsResult = await client.query(
+            "SELECT count(*) as count FROM pg_stat_activity WHERE state = 'active'"
+          );
+          metrics.activeConnections = parseInt(connectionsResult.rows[0].count);
+
+          // Get database size
+          const sizeResult = await client.query(
+            "SELECT pg_database_size($1) as size",
+            [dbConnection.databaseName]
+          );
+          metrics.databaseSize = parseInt(sizeResult.rows[0].size);
+
+          // Get slow queries (queries taking more than 1000ms)
+          const slowQueriesResult = await client.query(
+            "SELECT count(*) as count FROM pg_stat_activity WHERE state = 'active' AND now() - query_start > interval '1 second'"
+          );
+          metrics.slowQueries = parseInt(slowQueriesResult.rows[0].count);
+
+          // Get cache hit ratio
+          const cacheResult = await client.query(`
+            SELECT
+              sum(heap_blks_hit) / (sum(heap_blks_hit) + sum(heap_blks_read)) as ratio
+            FROM pg_statio_user_tables
+            WHERE (heap_blks_hit) + sum(heap_blks_read) > 0
+          `);
+          metrics.cacheHitRatio = parseFloat(cacheResult.rows[0].ratio || 0);
+
+          // Get average query time
+          const avgTimeResult = await client.query(`
+            SELECT avg(total_exec_time) as avg_time
+            FROM pg_stat_statements
+            WHERE calls > 0
+          `);
+          metrics.avgQueryTime = parseFloat(avgTimeResult.rows[0].avg_time || 0);
+
+          await client.end();
+
+          // Store the metrics
+          const [newMetrics] = await db
+            .insert(databaseMetrics)
+            .values({
+              databaseId: parsedId,
+              activeConnections: metrics.activeConnections,
+              databaseSize: metrics.databaseSize.toString(),
+              slowQueries: metrics.slowQueries,
+              avgQueryTime: metrics.avgQueryTime.toString(),
+              cacheHitRatio: metrics.cacheHitRatio.toString(),
+              metrics: metrics,
+            })
+            .returning();
+
+          res.json(newMetrics);
+        } catch (error: any) {
+          console.error("Metrics collection error:", error);
+          res.status(500).json({
+            message: "Failed to collect metrics",
+            error: error.message
+          });
+        }
+      } else {
+        res.json(latestMetrics[0]);
+      }
+    } catch (error) {
+      console.error("Metrics fetch error:", error);
+      res.status(500).send("Error fetching metrics");
     }
   });
 

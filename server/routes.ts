@@ -3,10 +3,9 @@ import { createServer, type Server } from "http";
 import { setupAuth } from "./auth";
 import { db } from "@db";
 import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics, clusters, instances } from "@db/schema";
-import { eq, and, ne } from "drizzle-orm";
+import { eq, and, ne, sql } from "drizzle-orm";
 import pkg from 'pg';
 const { Client } = pkg;
-import { sql } from 'drizzle-orm';
 
 function requireAuth(req: Express.Request, res: Express.Response, next: Express.NextFunction) {
   if (!req.isAuthenticated()) {
@@ -894,6 +893,7 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
+  // Database logs endpoint from edited snippet
   app.get("/api/database-logs", requireAuth, async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
@@ -906,12 +906,25 @@ export function registerRoutes(app: Express): Server {
       const databaseId = req.query.databaseId ? parseInt(req.query.databaseId as string) : undefined;
       const tagId = req.query.tagId ? parseInt(req.query.tagId as string) : undefined;
 
+      // Get database IDs accessible to the user
+      const userDatabases = await db.select({
+        id: databaseConnections.id
+      })
+        .from(databaseConnections)
+        .where(
+          req.user.role === 'ADMIN'
+            ? undefined
+            : eq(databaseConnections.userId, req.user.id)
+        );
+
+      const userDatabaseIds = userDatabases.map(db => db.id);
+
       // Build where conditions
       let whereConditions = [];
 
-      // Only filter by user ID for non-admin users
+      // Always filter by accessible databases
       if (req.user.role !== 'ADMIN') {
-        whereConditions.push(eq(databaseOperationLogs.userId, req.user.id));
+        whereConditions.push(sql`${databaseOperationLogs.databaseId} = ANY(${userDatabaseIds})`);
       }
 
       if (databaseId) {
@@ -919,7 +932,6 @@ export function registerRoutes(app: Express): Server {
       }
 
       if (tagId) {
-        // Get all database IDs that have the selected tag
         const databasesWithTag = db
           .select({ databaseId: databaseTags.databaseId })
           .from(databaseTags)
@@ -930,15 +942,19 @@ export function registerRoutes(app: Express): Server {
         );
       }
 
-      const finalWhere = whereConditions.length > 0 ? and(...whereConditions) : undefined;
+      const finalWhere = whereConditions.length > 0
+        ? and(...whereConditions)
+        : undefined;
 
-      // Get total count for pagination with filters
+      // Get total count
       const [{ count }] = await db
-        .select({ count: sql`count(*)::integer` })
+        .select({ count: sql<number>`count(*)` })
         .from(databaseOperationLogs)
         .where(finalWhere || sql`true`);
 
+      // Get logs with related data
       const logs = await db.query.databaseOperationLogs.findMany({
+        where: finalWhere,
         with: {
           database: true,
           user: {
@@ -948,7 +964,6 @@ export function registerRoutes(app: Express): Server {
             }
           },
         },
-        where: finalWhere,
         orderBy: (logs, { desc }) => [desc(logs.timestamp)],
         limit: pageSize,
         offset: offset,
@@ -1104,7 +1119,7 @@ export function registerRoutes(app: Express): Server {
           }
         }
       }
-    } catch(error: any) {
+    } catch (error: any) {
       console.error("Database metrics error:", error);
       res.status(500).json({
         message: "Error fetching database metrics",

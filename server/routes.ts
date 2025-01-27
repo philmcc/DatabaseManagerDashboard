@@ -167,7 +167,7 @@ export function registerRoutes(app: Express): Server {
     }
 
     try {
-      const query = db.query.databaseConnections.findMany({
+      const userDatabases = await db.query.databaseConnections.findMany({
         with: {
           tags: {
             with: {
@@ -181,13 +181,6 @@ export function registerRoutes(app: Express): Server {
           },
         },
       });
-
-      // Apply filters based on user role
-      if (req.user.role !== 'ADMIN') {
-        query.where = eq(databaseConnections.userId, req.user.id);
-      }
-
-      const userDatabases = await query;
 
       // Transform response to include formatted instance details
       const formattedDatabases = userDatabases.map(db => ({
@@ -234,10 +227,6 @@ export function registerRoutes(app: Express): Server {
         },
       });
 
-      // Apply additional filters for non-admin users
-      if (req.user.role !== 'ADMIN') {
-        query.where = and(eq(databaseConnections.id, parseInt(id)), eq(databaseConnections.userId, req.user.id));
-      }
 
       const database = await query;
 
@@ -547,19 +536,9 @@ export function registerRoutes(app: Express): Server {
       const { id } = req.params;
       const parsedId = parseInt(id);
 
-      // First check if database exists and user has access
-      let whereCondition;
-      if (req.user.role === 'ADMIN') {
-        whereCondition = eq(databaseConnections.id, parsedId);
-      } else {
-        whereCondition = and(
-          eq(databaseConnections.id, parsedId),
-          eq(databaseConnections.userId, req.user.id)
-        );
-      }
-
+      // Only check if database exists, no user role/ownership check
       const dbConnection = await db.query.databaseConnections.findFirst({
-        where: whereCondition,
+        where: eq(databaseConnections.id, parsedId),
         with: {
           instance: {
             columns: {
@@ -571,8 +550,8 @@ export function registerRoutes(app: Express): Server {
       });
 
       if (!dbConnection) {
-        return res.status(403).json({
-          message: "You don't have access to this database connection",
+        return res.status(404).json({
+          message: "Database connection not found",
         });
       }
 
@@ -1097,8 +1076,7 @@ export function registerRoutes(app: Express): Server {
           // Get database size
           const sizeResult = await client.query(
             "SELECT pg_database_size($1) as size",
-            [dbConnection.databaseName]
-          );
+            [dbConnection.databaseName]          );
           metrics.databaseSize = parseInt(sizeResult.rows[0].size);
 
           // Get slow queries (queries taking more than 1000ms)

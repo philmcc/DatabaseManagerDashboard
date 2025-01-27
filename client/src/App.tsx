@@ -69,6 +69,9 @@ function Router() {
       <Route path="/clusters/:id/edit">
         {user ? <ClusterForm /> : <Home />}
       </Route>
+      <Route path="/clusters/:clusterId/instances/:id">
+        {user ? <InstanceDetails /> : <Home />}
+      </Route>
       <Route path="/instances/:id">
         {user ? <InstanceDetails /> : <Home />}
       </Route>

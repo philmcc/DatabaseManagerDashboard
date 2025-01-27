@@ -50,11 +50,11 @@ export function registerRoutes(app: Express): Server {
           approvedAt: users.approvedAt,
           approvedBy: users.approvedBy,
           approvedByUser: {
-            username: users.username
+            username: sql<string>`approver.username`
           }
         })
         .from(users)
-        .leftJoin(users, eq(users.approvedBy, users.id));
+        .leftJoin(users.as('approver'), eq(users.approvedBy, sql`approver.id`));
 
       res.json(allUsers);
     } catch (error) {
@@ -1055,7 +1055,7 @@ export function registerRoutes(app: Express): Server {
           }
         }
       }
-    } catch (error: any) {
+    } catch(error: any) {
       console.error("Database metrics error:", error);
       res.status(500).json({
         message: "Error fetching database metrics",
@@ -1067,7 +1067,7 @@ export function registerRoutes(app: Express): Server {
   // Clusters Management Endpoints
   // Modified clusters fetch endpoint
   app.get("/api/clusters", requireAuth, async (req, res) => {
-        if (!req.isAuthenticated()) {
+    if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
 

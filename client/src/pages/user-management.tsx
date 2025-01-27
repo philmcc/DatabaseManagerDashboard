@@ -198,7 +198,7 @@ export default function UserManagement() {
                         </Select>
                       </TableCell>
                       <TableCell>
-                        <Badge variant={u.isApproved ? "success" : "secondary"}>
+                        <Badge variant={u.isApproved ? "outline" : "secondary"}>
                           {u.isApproved ? "Approved" : "Pending"}
                         </Badge>
                       </TableCell>

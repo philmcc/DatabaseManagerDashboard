@@ -14,13 +14,28 @@ export default function AuthPage() {
   const { login, register } = useUser();
   const { toast } = useToast();
   const [, setLocation] = useLocation();
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setIsLoading(true);
     try {
       const result = await (isLogin ? login : register)({ username, password });
       if (result.ok) {
-        setLocation("/dashboard");
+        toast({
+          title: isLogin ? "Login Successful" : "Registration Successful",
+          description: isLogin 
+            ? "Welcome back!" 
+            : "Your account has been created. Please wait for admin approval.",
+        });
+        if (isLogin) {
+          setLocation("/dashboard");
+        } else {
+          // Stay on the login page after registration
+          setIsLogin(true);
+          setUsername("");
+          setPassword("");
+        }
       } else {
         toast({
           variant: "destructive",
@@ -32,8 +47,10 @@ export default function AuthPage() {
       toast({
         variant: "destructive",
         title: "Error",
-        description: "Authentication failed",
+        description: isLogin ? "Login failed" : "Registration failed",
       });
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -56,6 +73,7 @@ export default function AuthPage() {
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 required
+                disabled={isLoading}
               />
             </div>
             <div className="space-y-2">
@@ -66,16 +84,22 @@ export default function AuthPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
+                disabled={isLoading}
               />
             </div>
-            <Button type="submit" className="w-full">
-              {isLogin ? "Login" : "Register"}
+            <Button type="submit" className="w-full" disabled={isLoading}>
+              {isLoading ? "Please wait..." : (isLogin ? "Login" : "Register")}
             </Button>
             <Button
               type="button"
               variant="ghost"
               className="w-full"
-              onClick={() => setIsLogin(!isLogin)}
+              onClick={() => {
+                setIsLogin(!isLogin);
+                setUsername("");
+                setPassword("");
+              }}
+              disabled={isLoading}
             >
               {isLogin ? "Need an account? Register" : "Have an account? Login"}
             </Button>
@@ -85,6 +109,7 @@ export default function AuthPage() {
                 variant="link"
                 className="w-full"
                 onClick={() => setLocation("/reset-password")}
+                disabled={isLoading}
               >
                 Forgot Password?
               </Button>

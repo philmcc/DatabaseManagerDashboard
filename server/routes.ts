@@ -41,15 +41,20 @@ export function registerRoutes(app: Express): Server {
   // Add user management routes
   app.get("/api/users", requireAdmin, async (req, res) => {
     try {
-      const allUsers = await db.query.users.findMany({
-        with: {
+      const allUsers = await db
+        .select({
+          id: users.id,
+          username: users.username,
+          role: users.role,
+          isApproved: users.isApproved,
+          approvedAt: users.approvedAt,
+          approvedBy: users.approvedBy,
           approvedByUser: {
-            columns: {
-              username: true,
-            },
-          },
-        },
-      });
+            username: users.username
+          }
+        })
+        .from(users)
+        .leftJoin(users, eq(users.approvedBy, users.id));
 
       res.json(allUsers);
     } catch (error) {

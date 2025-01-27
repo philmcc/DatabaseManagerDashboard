@@ -7,7 +7,7 @@ import { scrypt, randomBytes, timingSafeEqual } from "crypto";
 import { promisify } from "util";
 import { users, insertUserSchema, type SelectUser } from "@db/schema";
 import { db } from "@db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import nodemailer from "nodemailer";
 import { randomUUID } from "crypto";
 
@@ -120,6 +120,7 @@ export function setupAuth(app: Express) {
 
       const { username, password } = result.data;
 
+      // Check if user already exists
       const [existingUser] = await db
         .select()
         .from(users)
@@ -130,15 +131,34 @@ export function setupAuth(app: Express) {
         return res.status(400).send("Username already exists");
       }
 
+      // Check if this is the first user
+      const [firstUser] = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(users);
+      const isFirstUser = firstUser?.count === 0;
+
+      // Hash the password
       const hashedPassword = await crypto.hash(password);
 
+      // Create the new user with admin role and auto-approval if first user
       const [newUser] = await db
         .insert(users)
         .values({
           ...result.data,
           password: hashedPassword,
+          role: isFirstUser ? 'ADMIN' : 'READER',
+          isApproved: isFirstUser,
+          approvedAt: isFirstUser ? new Date() : null,
         })
         .returning();
+
+      // If this is the first user, we need to set them as their own approver
+      if (isFirstUser) {
+        await db
+          .update(users)
+          .set({ approvedBy: newUser.id })
+          .where(eq(users.id, newUser.id));
+      }
 
       req.login(newUser, (err) => {
         if (err) {
@@ -151,94 +171,6 @@ export function setupAuth(app: Express) {
       });
     } catch (error) {
       next(error);
-    }
-  });
-
-  app.post("/api/forgot-password", async (req, res) => {
-    try {
-      const { username } = req.body;
-      if (!username) {
-        return res.status(400).send("Email is required");
-      }
-
-      const [user] = await db
-        .select()
-        .from(users)
-        .where(eq(users.username, username))
-        .limit(1);
-
-      if (!user) {
-        return res.status(400).send("No account with that email exists");
-      }
-
-      const resetToken = randomUUID();
-      const resetTokenExpiry = new Date(Date.now() + 3600000); // 1 hour from now
-
-      await db
-        .update(users)
-        .set({
-          resetToken,
-          resetTokenExpiry,
-        })
-        .where(eq(users.id, user.id));
-
-      // Use a consistent URL format that matches our frontend routes
-      const resetUrl = `http://localhost:5000/reset-password#${resetToken}`;
-
-      await transporter.sendMail({
-        from: process.env.EMAIL_USER,
-        to: username,
-        subject: "Password Reset Request",
-        html: `
-          <p>You requested a password reset</p>
-          <p>Click this <a href="${resetUrl}">link</a> to reset your password</p>
-          <p>If you didn't request this, please ignore this email</p>
-        `,
-      });
-
-      res.json({ message: "Password reset email sent" });
-    } catch (error) {
-      console.error("Password reset error:", error);
-      res.status(500).send("Error sending password reset email");
-    }
-  });
-
-  app.post("/api/reset-password", async (req, res) => {
-    try {
-      const { token, password } = req.body;
-      if (!token || !password) {
-        return res.status(400).send("Token and password are required");
-      }
-
-      const [user] = await db
-        .select()
-        .from(users)
-        .where(eq(users.resetToken, token))
-        .limit(1);
-
-      if (!user) {
-        return res.status(400).send("Invalid or expired reset token");
-      }
-
-      if (!user.resetTokenExpiry || new Date() > user.resetTokenExpiry) {
-        return res.status(400).send("Reset token has expired");
-      }
-
-      const hashedPassword = await crypto.hash(password);
-
-      await db
-        .update(users)
-        .set({
-          password: hashedPassword,
-          resetToken: null,
-          resetTokenExpiry: null,
-        })
-        .where(eq(users.id, user.id));
-
-      res.json({ message: "Password has been reset" });
-    } catch (error) {
-      console.error("Reset password error:", error);
-      res.status(500).send("Error resetting password");
     }
   });
 

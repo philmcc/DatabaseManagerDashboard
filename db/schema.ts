@@ -18,10 +18,44 @@ export const users = pgTable("users", {
   theme: text("theme").default("light"),
   role: userRoleEnum("role").default('READER').notNull(),
   isApproved: boolean("is_approved").default(false).notNull(),
-  approvedBy: integer("approved_by").references(() => users.id),
+  approvedBy: integer("approved_by"),
   approvedAt: timestamp("approved_at"),
   updatedAt: timestamp("updatedAt").defaultNow(),
 });
+
+export const userRelations = relations(users, ({ one }) => ({
+  approvedByUser: one(users, {
+    fields: [users.approvedBy],
+    references: [users.id],
+  }),
+}));
+
+// Create schemas and types
+export const insertUserSchema = createInsertSchema(users);
+export const selectUserSchema = createSelectSchema(users);
+export type InsertUser = typeof users.$inferInsert;
+export type SelectUser = typeof users.$inferSelect;
+
+// Add type for operation logs
+export type SelectDatabaseOperationLog = {
+  id: number;
+  databaseId?: number;
+  userId: number;
+  operationType: string;
+  operationResult: string;
+  details: any;
+  timestamp: Date;
+  user?: {
+    username: string;
+    fullName: string | null;
+  };
+  database?: {
+    name: string;
+    host: string;
+    port: number;
+  };
+};
+
 
 export const clusters = pgTable("clusters", {
   id: serial("id").primaryKey(),
@@ -87,13 +121,6 @@ export const databaseTagsRelations = relations(databaseTags, ({ one }) => ({
 }));
 
 // Relations
-export const userRelations = relations(users, ({ many }) => ({
-  databaseConnections: many(databaseConnections),
-  tags: many(tags),
-  clusters: many(clusters),
-  instances: many(instances),
-}));
-
 export const clusterRelations = relations(clusters, ({ one, many }) => ({
   user: one(users, {
     fields: [clusters.userId],
@@ -177,9 +204,6 @@ export const databaseMetricsRelations = relations(databaseMetrics, ({ one }) => 
 }));
 
 // Schema validation
-export const insertUserSchema = createInsertSchema(users);
-export const selectUserSchema = createSelectSchema(users);
-
 export const insertTagSchema = createInsertSchema(tags);
 export const selectTagSchema = createSelectSchema(tags);
 
@@ -193,9 +217,6 @@ export const insertInstanceSchema = createInsertSchema(instances);
 export const selectInstanceSchema = createSelectSchema(instances);
 
 // Types
-export type InsertUser = typeof users.$inferInsert;
-export type SelectUser = typeof users.$inferSelect;
-
 export type InsertTag = typeof tags.$inferInsert;
 export type SelectTag = typeof tags.$inferSelect;
 

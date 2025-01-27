@@ -986,87 +986,50 @@ export function registerRoutes(app: Express): Server {
       const { id } = req.params;
       const parsedId = parseInt(id);
 
-      console.log(`Fetching metrics for database ID: ${parsedId}, User: ${req.user.id} (${req.user.role})`);
-
       // Get database connection details with instance
       const dbConnection = await db.query.databaseConnections.findFirst({
-        where: and(
-          eq(databaseConnections.id, parsedId),
-          // For non-admin users, check ownership
-          req.user.role === 'ADMIN' ? undefined : eq(databaseConnections.userId, req.user.id)
-        ),
+        where: eq(databaseConnections.id, parsedId),
         with: {
           instance: {
             columns: {
               hostname: true,
               port: true,
-              username: true,
-              password: true,
             },
           },
         },
-        columns: {
-          id: true,
-          name: true,
-          username: true,
-          password: true,
-          databaseName: true,
-          instanceId: true,
-          userId: true,
-        },
       });
 
-      console.log('Database connection query result:', dbConnection);
-
       if (!dbConnection) {
-        console.log('Database connection not found or access denied');
-        return res.status(404).send("Database connection not found or you don't have access to it");
+        return res.status(404).json({
+          message: "Database connection not found",
+        });
       }
 
       const instance = dbConnection.instance;
       if (!instance) {
-        console.log('Associated instance not found');
-        return res.status(404).send("Associated instance not found");
+        return res.status(404).json({
+          message: "Associated instance not found",
+        });
       }
 
-      console.log('Found database connection:', {
-        id: dbConnection.id,
-        name: dbConnection.name,
-        instanceId: dbConnection.instanceId,
-        databaseName: dbConnection.databaseName,
-        instance: {
-          hostname: instance.hostname,
-          port: instance.port,
-        }
+      // Create client connection
+      const client = new Client({
+        host: instance.hostname,
+        port: instance.port,
+        user: dbConnection.username,
+        password: dbConnection.password,
+        database: dbConnection.databaseName,
+        ssl: { rejectUnauthorized: false }
       });
 
-      // Get the latest metrics
-      const latestMetrics = await db
-        .select()
-        .from(databaseMetrics)
-        .where(eq(databaseMetrics.databaseId, parsedId))
-        .orderBy(desc(databaseMetrics.timestamp))
-        .limit(1);
+      try {
+        await client.connect();
 
-      // If no metrics exist yet, collect them
-      if (!latestMetrics.length) {
-        console.log('No existing metrics found, collecting new metrics');
-
-        const client = new Client({
-          host: instance.hostname,
-          port: instance.port,
-          user: dbConnection.username,
-          password: dbConnection.password,
-          database: dbConnection.databaseName,
-          ssl: { rejectUnauthorized: false }
-        });
+        const metrics: any = {
+          timestamp: new Date(),
+        };
 
         try {
-          await client.connect();
-          console.log('Connected to database for metrics collection');
-
-          const metrics: any = {};
-
           // Get active connections
           const connectionsResult = await client.query(
             "SELECT count(*) as count FROM pg_stat_activity WHERE state = 'active'"
@@ -1076,7 +1039,8 @@ export function registerRoutes(app: Express): Server {
           // Get database size
           const sizeResult = await client.query(
             "SELECT pg_database_size($1) as size",
-            [dbConnection.databaseName]          );
+            [dbConnection.databaseName]
+          );
           metrics.databaseSize = parseInt(sizeResult.rows[0].size);
 
           // Get slow queries (queries taking more than 1000ms)
@@ -1085,63 +1049,56 @@ export function registerRoutes(app: Express): Server {
           );
           metrics.slowQueries = parseInt(slowQueriesResult.rows[0].count);
 
+          // Get table statistics
+          const tableStatsResult = await client.query(`
+            SELECT 
+              schemaname,
+              relname as tablename,
+              n_live_tup as row_count,
+              n_dead_tup as dead_tuples
+            FROM pg_stat_user_tables
+            ORDER BY n_live_tup DESC
+            LIMIT 10
+          `);
+          metrics.tableStats = tableStatsResult.rows;
+
           // Get cache hit ratio
           const cacheResult = await client.query(`
-            SELECT
-              CASE WHEN sum(heap_blks_hit) + sum(heap_blks_read) = 0 
-                   THEN 0
-                   ELSE sum(heap_blks_hit)::float / (sum(heap_blks_hit) + sum(heap_blks_read))
-              END as ratio
+            SELECT 
+              sum(heap_blks_read) as heap_read,
+              sum(heap_blks_hit) as heap_hit
             FROM pg_statio_user_tables
           `);
-          metrics.cacheHitRatio = parseFloat(cacheResult.rows[0].ratio || 0);
 
-          // Get average query time
-          const avgTimeResult = await client.query(`
-            SELECT coalesce(avg(total_exec_time), 0) as avg_time
-            FROM pg_stat_statements
-            WHERE calls > 0
-          `);
-          metrics.avgQueryTime = parseFloat(avgTimeResult.rows[0].avg_time || 0);
+          const heapRead = parseInt(cacheResult.rows[0].heap_read);
+          const heapHit = parseInt(cacheResult.rows[0].heap_hit);
+          metrics.cacheHitRatio = heapRead + heapHit ===0
+            ? 0
+            : (heapHit / (heapRead + heapHit)) * 100;
 
           await client.end();
-          console.log('Metrics collected successfully:', metrics);
-
-          // Store the metrics
-          const [newMetrics] = await db
-            .insert(databaseMetrics)
-            .values({
-              databaseId: parsedId,
-              activeConnections: metrics.activeConnections,
-              databaseSize: metrics.databaseSize.toString(),
-              slowQueries: metrics.slowQueries,
-              avgQueryTime: metrics.avgQueryTime.toString(),
-              cacheHitRatio: metrics.cacheHitRatio.toString(),
-              metrics: metrics,
-            })
-            .returning();
-
-          res.json(newMetrics);
-        } catch (error: any) {
-          console.error("Metrics collection error:", error);
+          res.json(metrics);
+        } catch (error) {
+          console.error("Error fetching metrics:", error);
+          await client.end();
           res.status(500).json({
-            message: "Failed to collect metrics",
-            error: error.message
+            message: "Error fetching database metrics",
+            error: error instanceof Error ? error.message : String(error),
           });
-        } finally {
-          try {
-            await client.end();
-          } catch (e) {
-            console.error("Error closing client:", e);
-          }
         }
-      } else {
-        console.log('Returning existing metrics');
-        res.json(latestMetrics[0]);
+      } catch (error) {
+        console.error("Connection error:", error);
+        res.status(500).json({
+          message: "Error connecting to database",
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     } catch (error) {
-      console.error("Metrics fetch error:", error);
-      res.status(500).send("Error fetching metrics");
+      console.error("Metrics endpoint error:", error);
+      res.status(500).json({
+        message: "Error in metrics endpoint",
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   });
 

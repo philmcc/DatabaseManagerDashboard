@@ -168,8 +168,14 @@ export function registerRoutes(app: Express): Server {
     }
 
     try {
+      // For admin users, show all databases
+      // For other users, show only their own databases
+      const where = req.user.role === 'ADMIN'
+        ? undefined
+        : eq(databaseConnections.userId, req.user.id);
+
       const userDatabases = await db.query.databaseConnections.findMany({
-        where: eq(databaseConnections.userId, req.user.id),
+        where,
         with: {
           tags: {
             with: {
@@ -206,10 +212,12 @@ export function registerRoutes(app: Express): Server {
     try {
       const { id } = req.params;
       const database = await db.query.databaseConnections.findFirst({
-        where: and(
-          eq(databaseConnections.id, parseInt(id)),
-          eq(databaseConnections.userId, req.user.id)
-        ),
+        where: req.user.role === 'ADMIN'
+          ? eq(databaseConnections.id, parseInt(id))
+          : and(
+              eq(databaseConnections.id, parseInt(id)),
+              eq(databaseConnections.userId, req.user.id)
+            ),
         with: {
           tags: {
             with: {
@@ -609,10 +617,18 @@ export function registerRoutes(app: Express): Server {
     }
 
     try {
-      const userInstances = await db
-        .select()
-        .from(instances)
-        .where(eq(instances.userId, req.user.id));
+      // For admin users, show all instances
+      // For other users, show only their own instances
+      const where = req.user.role === 'ADMIN'
+        ? undefined
+        : eq(instances.userId, req.user.id);
+
+      const userInstances = await db.query.instances.findMany({
+        where,
+        with: {
+          cluster: true,
+        },
+      });
 
       res.json(userInstances);
     } catch (error) {
@@ -789,10 +805,12 @@ export function registerRoutes(app: Express): Server {
     try {
       const { id } = req.params;
       const instance = await db.query.instances.findFirst({
-        where: and(
-          eq(instances.id, parseInt(id)),
-          eq(instances.userId, req.user.id)
-        ),
+        where: req.user.role === 'ADMIN'
+          ? eq(instances.id, parseInt(id))
+          : and(
+              eq(instances.id, parseInt(id)),
+              eq(instances.userId, req.user.id)
+            ),
         with: {
           cluster: true,
           databases: true,
@@ -1073,10 +1091,18 @@ export function registerRoutes(app: Express): Server {
     }
 
     try {
-      const userClusters = await db
-        .select()
-        .from(clusters)
-        .where(eq(clusters.userId, req.user.id));
+      // For admin users, show all clusters
+      // For other users, show only their own clusters
+      const where = req.user.role === 'ADMIN'
+        ? undefined
+        : eq(clusters.userId, req.user.id);
+
+      const userClusters = await db.query.clusters.findMany({
+        where,
+        with: {
+          instances: true,
+        },
+      });
 
       res.json(userClusters);
     } catch (error) {

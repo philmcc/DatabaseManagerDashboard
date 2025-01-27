@@ -23,28 +23,25 @@ interface MetricsProps {
 interface TableStats {
   table_name: string;
   row_count: number;
-  dead_tuples: number;
-  size_mb: number;
+  size: string;
 }
 
 interface Metrics {
-  activeConnections: number;
-  databaseSize: number;
+  timestamp: string;
+  connections: number;
+  databaseSize: string;
   slowQueries: number;
-  avgQueryTime: number;
   cacheHitRatio: number;
   tableStats: TableStats[];
 }
 
 interface MetricsResponse {
-  current: Metrics;
-  historical: Array<{
-    timestamp: string;
-    activeConnections: number;
-    databaseSize: number;
-    slowQueries: number;
-    cacheHitRatio: number;
-  }>;
+  timestamp: string;
+  connections: number;
+  databaseSize: string;
+  slowQueries: number;
+  cacheHitRatio: number;
+  tableStats: TableStats[];
 }
 
 export default function MetricsDashboard({ databaseId }: MetricsProps) {
@@ -81,7 +78,7 @@ export default function MetricsDashboard({ databaseId }: MetricsProps) {
     );
   }
 
-  if (!metricsData?.current) {
+  if (!metricsData) {
     return (
       <Card>
         <CardContent className="pt-6">
@@ -93,8 +90,6 @@ export default function MetricsDashboard({ databaseId }: MetricsProps) {
       </Card>
     );
   }
-
-  const { current, historical } = metricsData;
 
   const formatNumber = (num: number) => {
     return new Intl.NumberFormat().format(Math.round(num * 100) / 100);
@@ -125,7 +120,7 @@ export default function MetricsDashboard({ databaseId }: MetricsProps) {
             <Activity className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{current.activeConnections}</div>
+            <div className="text-2xl font-bold">{metricsData.connections}</div>
           </CardContent>
         </Card>
 
@@ -137,7 +132,7 @@ export default function MetricsDashboard({ databaseId }: MetricsProps) {
             <Database className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{formatNumber(current.databaseSize)} MB</div>
+            <div className="text-2xl font-bold">{metricsData.databaseSize}</div>
           </CardContent>
         </Card>
 
@@ -149,7 +144,7 @@ export default function MetricsDashboard({ databaseId }: MetricsProps) {
             <Clock className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{current.slowQueries}</div>
+            <div className="text-2xl font-bold">{metricsData.slowQueries}</div>
           </CardContent>
         </Card>
 
@@ -162,81 +157,13 @@ export default function MetricsDashboard({ databaseId }: MetricsProps) {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {formatNumber(current.cacheHitRatio * 100)}%
+              {formatNumber(metricsData.cacheHitRatio)}%
             </div>
           </CardContent>
         </Card>
       </div>
 
-      {historical.length > 0 && (
-        <div className="grid gap-4 md:grid-cols-2">
-          <Card>
-            <CardHeader>
-              <CardTitle>Active Connections Over Time</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="h-[300px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart
-                    data={historical}
-                    margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis
-                      dataKey="timestamp"
-                      tickFormatter={(timestamp) => format(new Date(timestamp), "HH:mm")}
-                    />
-                    <YAxis />
-                    <Tooltip
-                      labelFormatter={(timestamp) => format(new Date(timestamp), "HH:mm:ss")}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="activeConnections"
-                      stroke="hsl(var(--primary))"
-                      dot={false}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Database Size Over Time</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="h-[300px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart
-                    data={historical}
-                    margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis
-                      dataKey="timestamp"
-                      tickFormatter={(timestamp) => format(new Date(timestamp), "HH:mm")}
-                    />
-                    <YAxis />
-                    <Tooltip
-                      labelFormatter={(timestamp) => format(new Date(timestamp), "HH:mm:ss")}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="databaseSize"
-                      stroke="hsl(var(--primary))"
-                      dot={false}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {current.tableStats.length > 0 && (
+      {metricsData.tableStats.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle>Table Statistics</CardTitle>
@@ -245,7 +172,7 @@ export default function MetricsDashboard({ databaseId }: MetricsProps) {
             <div className="h-[300px]">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart
-                  data={current.tableStats}
+                  data={metricsData.tableStats}
                   margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
                   layout="vertical"
                 >

@@ -107,33 +107,32 @@ function ClusterDetails() {
 
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {cluster.instances.map((instance: SelectInstance) => (
-            <Card key={instance.id} className="hover:bg-accent/50 transition-colors">
-              <CardHeader 
-                className="cursor-pointer" 
-                onClick={() => navigate(`/clusters/${params.id}/instances/${instance.id}/edit`)}
-              >
-                <CardTitle className="flex justify-between items-center">
-                  <span>{instance.hostname}</span>
-                </CardTitle>
-                {instance.description && (
-                  <p className="text-sm text-muted-foreground">{instance.description}</p>
-                )}
-              </CardHeader>
-              <CardContent>
-                <div className="flex gap-2">
-                  {instance.isWriter && (
-                    <span className="px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">
-                      Writer
-                    </span>
+            <Link key={instance.id} href={`/clusters/${params.id}/instances/${instance.id}`}>
+              <Card className="hover:bg-accent/50 transition-colors">
+                <CardHeader>
+                  <CardTitle className="flex justify-between items-center">
+                    <span>{instance.hostname}</span>
+                  </CardTitle>
+                  {instance.description && (
+                    <p className="text-sm text-muted-foreground">{instance.description}</p>
                   )}
-                  {!instance.isWriter && (
-                    <span className="px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800">
-                      Reader
-                    </span>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex gap-2">
+                    {instance.isWriter && (
+                      <span className="px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">
+                        Writer
+                      </span>
+                    )}
+                    {!instance.isWriter && (
+                      <span className="px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800">
+                        Reader
+                      </span>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </Link>
           ))}
           {!cluster.instances.length && (
             <Card className="col-span-full">

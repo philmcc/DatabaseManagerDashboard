@@ -538,6 +538,7 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
+  // Database connection test endpoint from edited snippet
   app.post("/api/databases/:id/test", requireAuth, async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
@@ -545,8 +546,6 @@ export function registerRoutes(app: Express): Server {
 
     try {
       const { id } = req.params;
-
-      // Build the where conditions based on user role
       const whereConditions = req.user.role === 'ADMIN'
         ? eq(databaseConnections.id, parseInt(id))
         : and(
@@ -819,7 +818,7 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  // Add instance fetch endpoint
+  // Instance fetch endpoint from edited snippet
   app.get("/api/instances/:id", requireAuth, async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
@@ -827,13 +826,15 @@ export function registerRoutes(app: Express): Server {
 
     try {
       const { id } = req.params;
+      const whereConditions = req.user.role === 'ADMIN'
+        ? eq(instances.id, parseInt(id))
+        : and(
+            eq(instances.id, parseInt(id)),
+            eq(instances.userId, req.user.id)
+          );
+
       const instance = await db.query.instances.findFirst({
-        where: req.user.role === 'ADMIN'
-          ? eq(instances.id, parseInt(id))
-          : and(
-              eq(instances.id, parseInt(id)),
-              eq(instances.userId, req.user.id)
-            ),
+        where: whereConditions,
         with: {
           cluster: true,
           databases: true,
@@ -1057,7 +1058,6 @@ export function registerRoutes(app: Express): Server {
           LIMIT 10
         `);
         metrics.tableStats = tableStatsResult.rows;
-
         await client.end();
 
         // Store metrics in our database

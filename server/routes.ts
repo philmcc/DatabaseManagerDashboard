@@ -982,10 +982,13 @@ export function registerRoutes(app: Express): Server {
 
   // Update metrics endpoint with proper access control
   app.get("/api/databases/:id/metrics", requireAuth, async (req, res) => {
+    console.log('Metrics endpoint called for database ID:', req.params.id);
+
     try {
       const { id } = req.params;
       const parsedId = parseInt(id);
 
+      console.log('Fetching database connection details');
       // Get database connection details
       const dbConnection = await db.query.databaseConnections.findFirst({
         where: eq(databaseConnections.id, parsedId),
@@ -999,12 +1002,28 @@ export function registerRoutes(app: Express): Server {
         },
       });
 
+      console.log('Database connection query result:', {
+        found: !!dbConnection,
+        hasInstance: !!dbConnection?.instance,
+        connectionDetails: dbConnection ? {
+          id: dbConnection.id,
+          name: dbConnection.name,
+          databaseName: dbConnection.databaseName,
+          instance: dbConnection.instance ? {
+            hostname: dbConnection.instance.hostname,
+            port: dbConnection.instance.port
+          } : null
+        } : null
+      });
+
       if (!dbConnection || !dbConnection.instance) {
+        console.log('Database connection or instance not found');
         return res.status(404).json({
           message: "Database connection or instance not found",
         });
       }
 
+      console.log('Creating database client with connection details');
       const client = new Client({
         host: dbConnection.instance.hostname,
         port: dbConnection.instance.port,
@@ -1014,62 +1033,80 @@ export function registerRoutes(app: Express): Server {
         ssl: { rejectUnauthorized: false }
       });
 
-      await client.connect();
+      console.log('Attempting to connect to database');
+      try {
+        await client.connect();
+        console.log('Successfully connected to database');
 
-      // Basic metrics that should work on any PostgreSQL instance
-      const baseMetrics = {
-        timestamp: new Date().toISOString(),
-        connections: 0,
-        databaseSize: '0',
-        slowQueries: 0,
-        cacheHitRatio: 0,
-        tableStats: [],
-      };
+        const metrics = {
+          timestamp: new Date().toISOString(),
+          connections: 0,
+          databaseSize: '0',
+          slowQueries: 0,
+          cacheHitRatio: 0,
+          tableStats: [],
+        };
 
-      // Get active connections
-      const connectionsResult = await client.query(
-        "SELECT count(*) as count FROM pg_stat_activity WHERE datname = $1",
-        [dbConnection.databaseName]
-      );
-      baseMetrics.connections = parseInt(connectionsResult.rows[0].count);
+        console.log('Collecting active connections');
+        const connectionsResult = await client.query(
+          "SELECT count(*) as count FROM pg_stat_activity WHERE datname = $1",
+          [dbConnection.databaseName]
+        );
+        metrics.connections = parseInt(connectionsResult.rows[0].count);
+        console.log('Active connections:', metrics.connections);
 
-      // Get database size
-      const sizeResult = await client.query(
-        "SELECT pg_size_pretty(pg_database_size($1)) as size",
-        [dbConnection.databaseName]
-      );
-      baseMetrics.databaseSize = sizeResult.rows[0].size;
+        console.log('Collecting database size');
+        const sizeResult = await client.query(
+          "SELECT pg_size_pretty(pg_database_size($1)) as size",
+          [dbConnection.databaseName]
+        );
+        metrics.databaseSize = sizeResult.rows[0].size;
+        console.log('Database size:', metrics.databaseSize);
 
-      // Get table statistics
-      const tableStatsResult = await client.query(`
-        SELECT 
-          schemaname,
-          relname as table_name,
-          n_live_tup as row_count,
-          pg_size_pretty(pg_relation_size(schemaname || '.' || relname)) as size
-        FROM pg_stat_user_tables 
-        WHERE schemaname = 'public'
-        ORDER BY n_live_tup DESC 
-        LIMIT 5
-      `);
-      baseMetrics.tableStats = tableStatsResult.rows;
+        console.log('Collecting table statistics');
+        const tableStatsResult = await client.query(`
+          SELECT 
+            schemaname,
+            relname as table_name,
+            n_live_tup as row_count,
+            pg_size_pretty(pg_relation_size(schemaname || '.' || relname)) as size
+          FROM pg_stat_user_tables 
+          WHERE schemaname = 'public'
+          ORDER BY n_live_tup DESC 
+          LIMIT 5
+        `);
+        metrics.tableStats = tableStatsResult.rows;
+        console.log('Table statistics:', metrics.tableStats);
 
-      // Get basic cache statistics
-      const cacheResult = await client.query(`
-        SELECT 
-          sum(heap_blks_hit) as heap_hit,
-          sum(heap_blks_read) as heap_read
-        FROM pg_statio_user_tables
-      `);
+        console.log('Collecting cache statistics');
+        const cacheResult = await client.query(`
+          SELECT 
+            COALESCE(sum(heap_blks_hit), 0) as heap_hit,
+            COALESCE(sum(heap_blks_read), 0) as heap_read
+          FROM pg_statio_user_tables
+        `);
 
-      const heapHit = parseInt(cacheResult.rows[0].heap_hit) || 0;
-      const heapRead = parseInt(cacheResult.rows[0].heap_read) || 0;
-      baseMetrics.cacheHitRatio = heapRead + heapHit === 0 
-        ? 0 
-        : Math.round((heapHit / (heapRead + heapHit)) * 100);
+        const heapHit = parseInt(cacheResult.rows[0].heap_hit);
+        const heapRead = parseInt(cacheResult.rows[0].heap_read);
+        metrics.cacheHitRatio = heapRead + heapHit === 0 
+          ? 0 
+          : Math.round((heapHit / (heapRead + heapHit)) * 100);
+        console.log('Cache hit ratio:', metrics.cacheHitRatio);
 
-      await client.end();
-      res.json(baseMetrics);
+        console.log('Closing database connection');
+        await client.end();
+
+        console.log('Sending metrics response:', metrics);
+        res.json(metrics);
+      } catch (error) {
+        console.error('Error during metrics collection:', error);
+        try {
+          await client.end();
+        } catch (closeError) {
+          console.error('Error closing client after collection error:', closeError);
+        }
+        throw error; // Re-throw to be caught by outer catch block
+      }
     } catch (error) {
       console.error("Metrics collection error:", error);
       res.status(500).json({

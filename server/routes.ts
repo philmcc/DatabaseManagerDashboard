@@ -556,7 +556,14 @@ export function registerRoutes(app: Express): Server {
               eq(databaseConnections.userId, req.user.id)
             ),
         with: {
-          instance: true,
+          instance: {
+            columns: {
+              hostname: true,
+              port: true,
+              username: true,
+              password: true,
+            },
+          },
         },
       });
 
@@ -943,21 +950,36 @@ export function registerRoutes(app: Express): Server {
         : undefined;
 
       // Get total count
-      const [{ count }] = await db
-        .select({ count: sql<number>`count(*)` })
+      const totalCount = await db
+        .select({ count: sql<number>`count(*)::integer` })
         .from(databaseOperationLogs)
-        .where(finalWhere || sql`true`);
+        .where(finalWhere ?? sql`true`);
+
+      const total = totalCount[0]?.count ?? 0;
 
       // Get logs with related data
       const logs = await db.query.databaseOperationLogs.findMany({
         where: finalWhere,
         with: {
-          database: true,
+          database: {
+            columns: {
+              name: true,
+              databaseName: true,
+            },
+            with: {
+              instance: {
+                columns: {
+                  hostname: true,
+                  port: true,
+                },
+              },
+            },
+          },
           user: {
             columns: {
               username: true,
-              fullName: true
-            }
+              fullName: true,
+            },
           },
         },
         orderBy: (logs, { desc }) => [desc(logs.timestamp)],
@@ -965,7 +987,7 @@ export function registerRoutes(app: Express): Server {
         offset: offset,
       });
 
-      res.json({ logs, total: count });
+      res.json({ logs, total });
     } catch (error) {
       console.error("Database logs fetch error:", error);
       res.status(500).send("Error fetching database logs");

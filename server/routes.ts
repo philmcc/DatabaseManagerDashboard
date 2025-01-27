@@ -547,14 +547,13 @@ export function registerRoutes(app: Express): Server {
       const { id } = req.params;
       const parsedId = parseInt(id);
 
-      // Get database connection details with instance
+      // Get database connection details with instance - now includes proper user access check
       const dbConnection = await db.query.databaseConnections.findFirst({
-        where: req.user.role === 'ADMIN'
-          ? eq(databaseConnections.id, parsedId)
-          : and(
-              eq(databaseConnections.id, parsedId),
-              eq(databaseConnections.userId, req.user.id)
-            ),
+        where: and(
+          eq(databaseConnections.id, parsedId),
+          // Only check userId if not admin
+          req.user.role !== 'ADMIN' ? eq(databaseConnections.userId, req.user.id) : undefined
+        ),
         with: {
           instance: {
             columns: {

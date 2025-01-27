@@ -547,13 +547,19 @@ export function registerRoutes(app: Express): Server {
       const { id } = req.params;
       const parsedId = parseInt(id);
 
-      // Get database connection details with instance - now includes proper user access check
-      const dbConnection = await db.query.databaseConnections.findFirst({
-        where: and(
+      // First check if database exists and user has access
+      let whereCondition;
+      if (req.user.role === 'ADMIN') {
+        whereCondition = eq(databaseConnections.id, parsedId);
+      } else {
+        whereCondition = and(
           eq(databaseConnections.id, parsedId),
-          // Only check userId if not admin
-          req.user.role !== 'ADMIN' ? eq(databaseConnections.userId, req.user.id) : undefined
-        ),
+          eq(databaseConnections.userId, req.user.id)
+        );
+      }
+
+      const dbConnection = await db.query.databaseConnections.findFirst({
+        where: whereCondition,
         with: {
           instance: {
             columns: {
@@ -564,27 +570,20 @@ export function registerRoutes(app: Express): Server {
         },
       });
 
-      console.log('Database connection query result:', dbConnection);
-
       if (!dbConnection) {
-        console.log('Database connection not found or access denied');
-        return res.status(404).send("Database connection not found or you don't have access to it");
+        return res.status(403).json({
+          message: "You don't have access to this database connection",
+        });
       }
 
       const instance = dbConnection.instance;
       if (!instance) {
-        console.log('Associated instance not found');
-        return res.status(404).send("Associated instance not found");
+        return res.status(404).json({
+          message: "Associated instance not found",
+        });
       }
 
-      console.log('Attempting to connect to:', {
-        host: instance.hostname,
-        port: instance.port,
-        user: dbConnection.username,
-        database: dbConnection.databaseName,
-      });
-
-      // Test connection using direct configuration
+      // Test connection using instance configuration
       const client = new Client({
         host: instance.hostname,
         port: instance.port,
@@ -596,7 +595,6 @@ export function registerRoutes(app: Express): Server {
 
       try {
         await client.connect();
-        console.log('Database connection successful');
         await client.end();
 
         // Log successful test
@@ -614,8 +612,6 @@ export function registerRoutes(app: Express): Server {
 
         res.json({ message: "Connection successful" });
       } catch (error: any) {
-        console.error('Database connection failed:', error.message);
-
         // Log failed test
         await db.insert(databaseOperationLogs).values({
           databaseId: parsedId,
@@ -639,10 +635,12 @@ export function registerRoutes(app: Express): Server {
       }
     } catch (error) {
       console.error("Connection test error:", error);
-      res.status(500).send("Error testing connection");
+      res.status(500).json({
+        message: "Error testing connection",
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   });
-
   // Add instance list endpoint
   app.get("/api/instances", requireAuth, async (req, res) => {
     if (!req.isAuthenticated()) {

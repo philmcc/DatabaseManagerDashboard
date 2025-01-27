@@ -17,6 +17,7 @@ import ClusterForm from "@/pages/cluster-form";
 import ClusterDetails from "@/pages/cluster-details";
 import InstanceForm from "@/pages/instance-form";
 import InstanceDetails from "@/pages/instance-details";
+import UserManagement from "@/pages/user-management";
 import { useUser } from "@/hooks/use-user";
 import { Loader2 } from "lucide-react";
 
@@ -29,6 +30,10 @@ function Router() {
         <Loader2 className="h-8 w-8 animate-spin text-border" />
       </div>
     );
+  }
+
+  if (!user?.isApproved) {
+    return <AuthPage />;
   }
 
   return (
@@ -49,25 +54,25 @@ function Router() {
         {user ? <TagsPage /> : <Home />}
       </Route>
       <Route path="/databases/new">
-        {user ? <DatabaseForm /> : <Home />}
+        {user?.role !== 'READER' ? <DatabaseForm /> : <Home />}
       </Route>
       <Route path="/databases/:id">
         {user ? <DatabaseDetails /> : <Home />}
       </Route>
       <Route path="/databases/:id/edit">
-        {user ? <DatabaseForm /> : <Home />}
+        {user?.role !== 'READER' ? <DatabaseForm /> : <Home />}
       </Route>
       <Route path="/clusters">
         {user ? <ClustersPage /> : <Home />}
       </Route>
       <Route path="/clusters/new">
-        {user ? <ClusterForm /> : <Home />}
+        {user?.role !== 'READER' ? <ClusterForm /> : <Home />}
       </Route>
       <Route path="/clusters/:id">
         {user ? <ClusterDetails /> : <Home />}
       </Route>
       <Route path="/clusters/:id/edit">
-        {user ? <ClusterForm /> : <Home />}
+        {user?.role !== 'READER' ? <ClusterForm /> : <Home />}
       </Route>
       <Route path="/clusters/:clusterId/instances/:id">
         {user ? <InstanceDetails /> : <Home />}
@@ -76,10 +81,13 @@ function Router() {
         {user ? <InstanceDetails /> : <Home />}
       </Route>
       <Route path="/clusters/:clusterId/instances/new">
-        {user ? <InstanceForm /> : <Home />}
+        {user?.role !== 'READER' ? <InstanceForm /> : <Home />}
       </Route>
       <Route path="/clusters/:clusterId/instances/:id/edit">
-        {user ? <InstanceForm /> : <Home />}
+        {user?.role !== 'READER' ? <InstanceForm /> : <Home />}
+      </Route>
+      <Route path="/users">
+        {user?.role === 'ADMIN' ? <UserManagement /> : <Home />}
       </Route>
       <Route component={NotFound} />
     </Switch>

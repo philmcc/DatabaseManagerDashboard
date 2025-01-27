@@ -1,6 +1,9 @@
-import { pgTable, text, serial, timestamp, integer, boolean, primaryKey, jsonb, numeric, json } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, boolean, primaryKey, jsonb, numeric, json, pgEnum } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { relations } from "drizzle-orm";
+
+// Role enum for user types
+export const userRoleEnum = pgEnum('user_role', ['ADMIN', 'WRITER', 'READER']);
 
 // Base tables
 export const users = pgTable("users", {
@@ -13,6 +16,10 @@ export const users = pgTable("users", {
   bio: text("bio"),
   avatar: text("avatar"),
   theme: text("theme").default("light"),
+  role: userRoleEnum("role").default('READER').notNull(),
+  isApproved: boolean("is_approved").default(false).notNull(),
+  approvedBy: integer("approved_by").references(() => users.id),
+  approvedAt: timestamp("approved_at"),
   updatedAt: timestamp("updatedAt").defaultNow(),
 });
 

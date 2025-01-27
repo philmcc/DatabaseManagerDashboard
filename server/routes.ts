@@ -8,15 +8,129 @@ import pkg from 'pg';
 const { Client } = pkg;
 import { sql } from 'drizzle-orm';
 
+function requireAuth(req: Express.Request, res: Express.Response, next: Express.NextFunction) {
+  if (!req.isAuthenticated()) {
+    return res.status(401).send("Not authenticated");
+  }
+  next();
+}
+
+function requireAdmin(req: Express.Request, res: Express.Response, next: Express.NextFunction) {
+  if (!req.isAuthenticated()) {
+    return res.status(401).send("Not authenticated");
+  }
+  if (req.user.role !== 'ADMIN') {
+    return res.status(403).send("Not authorized");
+  }
+  next();
+}
+
+function requireWriterOrAdmin(req: Express.Request, res: Express.Response, next: Express.NextFunction) {
+  if (!req.isAuthenticated()) {
+    return res.status(401).send("Not authenticated");
+  }
+  if (req.user.role !== 'ADMIN' && req.user.role !== 'WRITER') {
+    return res.status(403).send("Not authorized");
+  }
+  next();
+}
+
 export function registerRoutes(app: Express): Server {
   setupAuth(app);
 
-  // Profile update endpoint (existing)
-  app.patch("/api/user/profile", async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).send("Not authenticated");
-    }
+  // Add user management routes
+  app.get("/api/users", requireAdmin, async (req, res) => {
+    try {
+      const allUsers = await db.query.users.findMany({
+        with: {
+          approvedByUser: {
+            columns: {
+              username: true,
+            },
+          },
+        },
+      });
 
+      res.json(allUsers);
+    } catch (error) {
+      console.error("Users fetch error:", error);
+      res.status(500).send("Error fetching users");
+    }
+  });
+
+  app.patch("/api/users/:id/role", requireAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { role } = req.body;
+
+      if (parseInt(id) === req.user.id) {
+        return res.status(400).send("Cannot change your own role");
+      }
+
+      const [updatedUser] = await db
+        .update(users)
+        .set({
+          role,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, parseInt(id)))
+        .returning();
+
+      res.json(updatedUser);
+    } catch (error) {
+      console.error("User role update error:", error);
+      res.status(500).send("Error updating user role");
+    }
+  });
+
+  app.post("/api/users/:id/approve", requireAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const [updatedUser] = await db
+        .update(users)
+        .set({
+          isApproved: true,
+          approvedBy: req.user.id,
+          approvedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, parseInt(id)))
+        .returning();
+
+      res.json(updatedUser);
+    } catch (error) {
+      console.error("User approval error:", error);
+      res.status(500).send("Error approving user");
+    }
+  });
+
+  app.post("/api/users/:id/revoke", requireAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      if (parseInt(id) === req.user.id) {
+        return res.status(400).send("Cannot revoke your own access");
+      }
+
+      const [updatedUser] = await db
+        .update(users)
+        .set({
+          isApproved: false,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, parseInt(id)))
+        .returning();
+
+      res.json(updatedUser);
+    } catch (error) {
+      console.error("User revocation error:", error);
+      res.status(500).send("Error revoking user access");
+    }
+  });
+
+  // Update existing profile update endpoint
+  app.patch("/api/user/profile", requireAuth, async (req, res) => {
     try {
       const { fullName, bio, theme } = req.body;
       const userId = req.user?.id;
@@ -40,7 +154,7 @@ export function registerRoutes(app: Express): Server {
   });
 
   // Database Management Endpoints
-  app.get("/api/databases", async (req, res) => {
+  app.get("/api/databases", requireAuth, async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
@@ -76,7 +190,7 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  app.get("/api/databases/:id", async (req, res) => {
+  app.get("/api/databases/:id", requireAuth, async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
@@ -120,7 +234,7 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  app.post("/api/databases", async (req, res) => {
+  app.post("/api/databases", requireWriterOrAdmin, async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
@@ -220,7 +334,7 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  app.patch("/api/databases/:id", async (req, res) => {
+  app.patch("/api/databases/:id", requireWriterOrAdmin, async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
@@ -390,7 +504,7 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  app.post("/api/databases/:id/test", async (req, res) => {
+  app.post("/api/databases/:id/test", requireAuth, async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
@@ -481,7 +595,7 @@ export function registerRoutes(app: Express): Server {
   });
 
   // Add instance list endpoint
-  app.get("/api/instances", async (req, res) => {
+  app.get("/api/instances", requireAuth, async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
@@ -500,7 +614,7 @@ export function registerRoutes(app: Express): Server {
   });
 
   // Add instance creation route
-  app.post("/api/clusters/:clusterId/instances", async (req, res) => {
+  app.post("/api/clusters/:clusterId/instances", requireWriterOrAdmin, async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
@@ -569,7 +683,7 @@ export function registerRoutes(app: Express): Server {
   });
 
   // Add instance update endpoint
-  app.patch("/api/instances/:id", async (req, res) => {
+  app.patch("/api/instances/:id", requireWriterOrAdmin, async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
@@ -659,7 +773,7 @@ export function registerRoutes(app: Express): Server {
   });
 
   // Add instance fetch endpoint
-  app.get("/api/instances/:id", async (req, res) => {
+  app.get("/api/instances/:id", requireAuth, async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
@@ -690,7 +804,7 @@ export function registerRoutes(app: Express): Server {
 
 
   // Tags Management Endpoints
-  app.get("/api/tags", async (req, res) => {
+  app.get("/api/tags", requireAuth, async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
@@ -708,7 +822,7 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  app.post("/api/tags", async (req, res) => {
+  app.post("/api/tags", requireAuth, async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
@@ -730,7 +844,7 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  app.get("/api/database-logs", async (req, res) => {
+  app.get("/api/database-logs", requireAuth, async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
@@ -788,7 +902,7 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  app.get("/api/databases/:id/metrics", async (req, res) => {
+  app.get("/api/databases/:id/metrics", requireAuth, async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
@@ -947,8 +1061,8 @@ export function registerRoutes(app: Express): Server {
 
   // Clusters Management Endpoints
   // Modified clusters fetch endpoint
-  app.get("/api/clusters", async (req, res) => {
-    if (!req.isAuthenticated()) {
+  app.get("/api/clusters", requireAuth, async (req, res) => {
+        if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
 
@@ -965,7 +1079,7 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  app.post("/api/clusters", async (req, res) => {
+  app.post("/api/clusters", requireWriterOrAdmin, async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
@@ -989,7 +1103,7 @@ export function registerRoutes(app: Express): Server {
   });
 
   // Modified cluster details endpoint
-  app.get("/api/clusters/:id", async (req, res) => {
+  app.get("/api/clusters/:id", requireAuth, async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
@@ -1027,7 +1141,7 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  app.patch("/api/clusters/:id", async (req, res) => {
+  app.patch("/api/clusters/:id", requireWriterOrAdmin, async (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).send("Not authenticated");
     }
@@ -1062,5 +1176,6 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  const httpServer = createServer(app);  return httpServer;
+  const httpServer = createServer(app);
+  return httpServer;
 }

@@ -4,7 +4,7 @@ import { useUser } from "@/hooks/use-user";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import { Link } from "wouter";
-import { Settings, LogOut, Database, Activity, Server } from "lucide-react";
+import { Settings, LogOut, Database, Activity, Server, Users } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import BaseLayout from "@/components/layout/base-layout";
 import { SelectDatabaseConnection, SelectDatabaseOperationLog } from "@db/schema";
@@ -125,6 +125,15 @@ export default function Dashboard() {
             Welcome {user?.fullName || user?.username}
           </h1>
           <div className="space-x-2">
+            {user?.role === 'ADMIN' && (
+              <Button
+                variant="outline"
+                onClick={() => setLocation("/users")}
+              >
+                <Users className="mr-2 h-4 w-4" />
+                Manage Users
+              </Button>
+            )}
             <Button
               variant="outline"
               onClick={() => setLocation("/profile-settings")}

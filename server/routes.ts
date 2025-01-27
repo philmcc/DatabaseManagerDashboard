@@ -545,16 +545,23 @@ export function registerRoutes(app: Express): Server {
 
     try {
       const { id } = req.params;
-      const [dbConnection] = await db
-        .select()
-        .from(databaseConnections)
-        .where(
-          and(
-            eq(databaseConnections.id, parseInt(id)),
-            eq(databaseConnections.userId, req.user.id)
-          )
-        )
-        .limit(1);
+      const query = db.query.databaseConnections.findFirst({
+        where: eq(databaseConnections.id, parseInt(id)),
+        with: {
+          instance: true,
+        },
+      });
+
+      // Apply additional filters for non-admin users
+      if (req.user.role !== 'ADMIN') {
+        if(req.user.role === 'WRITER' || req.user.role === 'READER'){
+          query.where(eq(databaseConnections.userId, req.user.id));
+        } else {
+          return res.status(403).send("Not authorized");
+        }
+      }
+
+      const dbConnection = await query;
 
       if (!dbConnection) {
         return res.status(404).send("Database connection not found");

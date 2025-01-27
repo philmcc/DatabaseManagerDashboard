@@ -545,23 +545,21 @@ export function registerRoutes(app: Express): Server {
 
     try {
       const { id } = req.params;
-      const query = db.query.databaseConnections.findFirst({
-        where: eq(databaseConnections.id, parseInt(id)),
+
+      // Build the where conditions based on user role
+      const whereConditions = req.user.role === 'ADMIN'
+        ? eq(databaseConnections.id, parseInt(id))
+        : and(
+            eq(databaseConnections.id, parseInt(id)),
+            eq(databaseConnections.userId, req.user.id)
+          );
+
+      const dbConnection = await db.query.databaseConnections.findFirst({
+        where: whereConditions,
         with: {
           instance: true,
         },
       });
-
-      // Apply additional filters for non-admin users
-      if (req.user.role !== 'ADMIN') {
-        if(req.user.role === 'WRITER' || req.user.role === 'READER'){
-          query.where(eq(databaseConnections.userId, req.user.id));
-        } else {
-          return res.status(403).send("Not authorized");
-        }
-      }
-
-      const dbConnection = await query;
 
       if (!dbConnection) {
         return res.status(404).send("Database connection not found");
@@ -1062,8 +1060,7 @@ export function registerRoutes(app: Express): Server {
           avgQueryTime: 0, // We'll calculate this in a future update
           cacheHitRatio: metrics.cacheHitRatio,
           metrics: metrics,
-        });
-        // Get historical metrics
+        });        // Get historical metrics
         const timeFilter = timeRange === '24h'
           ? sql`interval '24 hours'`
           : timeRange === '7d'

@@ -12,7 +12,7 @@ export default function Home() {
       <Card className="w-full max-w-md mx-4">
         <CardHeader>
           <CardTitle className="text-3xl font-bold text-center bg-gradient-to-r from-blue-600 to-blue-800 bg-clip-text text-transparent">
-            DBA Dashboart
+            DBA Dashboard
           </CardTitle>
         </CardHeader>
         <CardContent>

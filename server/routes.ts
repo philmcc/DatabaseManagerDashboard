@@ -923,43 +923,43 @@ export function registerRoutes(app: Express): Server {
       const userDatabaseIds = userDatabases.map(db => db.id);
 
       // Build where conditions
-      let whereConditions = [];
+      const conditions = [];
 
-      // Always filter by accessible databases
-      if (req.user.role !== 'ADMIN') {
-        whereConditions.push(sql`${databaseOperationLogs.databaseId} = ANY(${userDatabaseIds})`);
+      // Always filter by accessible databases for non-admin users
+      if (req.user.role !== 'ADMIN' && userDatabaseIds.length > 0) {
+        conditions.push(sql`${databaseOperationLogs.databaseId} = ANY(${sql`ARRAY[${sql.join(userDatabaseIds, sql`, `)}]`})`);
       }
 
+      // Add specific database filter if provided
       if (databaseId) {
-        whereConditions.push(eq(databaseOperationLogs.databaseId, databaseId));
+        conditions.push(eq(databaseOperationLogs.databaseId, databaseId));
       }
 
+      // Add tag filter if provided
       if (tagId) {
-        const databasesWithTag = db
+        const databasesWithTag = await db
           .select({ databaseId: databaseTags.databaseId })
           .from(databaseTags)
           .where(eq(databaseTags.tagId, tagId));
 
-        whereConditions.push(
-          sql`${databaseOperationLogs.databaseId} IN (${databasesWithTag})`
-        );
+        const taggedDatabaseIds = databasesWithTag.map(d => d.databaseId);
+        if (taggedDatabaseIds.length > 0) {
+          conditions.push(sql`${databaseOperationLogs.databaseId} = ANY(${sql`ARRAY[${sql.join(taggedDatabaseIds, sql`, `)}]`})`);
+        }
       }
 
-      const finalWhere = whereConditions.length > 0
-        ? and(...whereConditions)
-        : undefined;
-
       // Get total count
-      const totalCount = await db
-        .select({ count: sql<number>`count(*)::integer` })
+      const totalResult = await db.select({
+        count: sql<number>`COUNT(*)::integer`,
+      })
         .from(databaseOperationLogs)
-        .where(finalWhere ?? sql`true`);
+        .where(conditions.length > 0 ? and(...conditions) : undefined);
 
-      const total = totalCount[0]?.count ?? 0;
+      const total = totalResult[0]?.count || 0;
 
       // Get logs with related data
       const logs = await db.query.databaseOperationLogs.findMany({
-        where: finalWhere,
+        where: conditions.length > 0 ? and(...conditions) : undefined,
         with: {
           database: {
             columns: {

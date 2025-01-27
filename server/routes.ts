@@ -545,33 +545,29 @@ export function registerRoutes(app: Express): Server {
 
     try {
       const { id } = req.params;
-      const whereConditions = req.user.role === 'ADMIN'
-        ? eq(databaseConnections.id, parseInt(id))
-        : and(
-            eq(databaseConnections.id, parseInt(id)),
-            eq(databaseConnections.userId, req.user.id)
-          );
+      const parsedId = parseInt(id);
 
+      // Get database connection details with instance
       const dbConnection = await db.query.databaseConnections.findFirst({
-        where: whereConditions,
+        where: req.user.role === 'ADMIN'
+          ? eq(databaseConnections.id, parsedId)
+          : and(
+              eq(databaseConnections.id, parsedId),
+              eq(databaseConnections.userId, req.user.id)
+            ),
         with: {
           instance: true,
         },
       });
 
       if (!dbConnection) {
-        return res.status(404).send("Database connection not found");
+        return res.status(404).send("Database connection not found or you don't have access to it");
       }
 
       // Get instance details
-      const [instance] = await db
-        .select()
-        .from(instances)
-        .where(eq(instances.id, dbConnection.instanceId))
-        .limit(1);
-
+      const instance = dbConnection.instance;
       if (!instance) {
-        return res.status(404).send("Instance not found");
+        return res.status(404).send("Associated instance not found");
       }
 
       // Test connection using direct configuration
@@ -590,7 +586,7 @@ export function registerRoutes(app: Express): Server {
 
         // Log successful test
         await db.insert(databaseOperationLogs).values({
-          databaseId: parseInt(id),
+          databaseId: parsedId,
           userId: req.user.id,
           operationType: 'test',
           operationResult: 'success',
@@ -605,7 +601,7 @@ export function registerRoutes(app: Express): Server {
       } catch (error: any) {
         // Log failed test
         await db.insert(databaseOperationLogs).values({
-          databaseId: parseInt(id),
+          databaseId: parsedId,
           userId: req.user.id,
           operationType: 'test',
           operationResult: 'failure',

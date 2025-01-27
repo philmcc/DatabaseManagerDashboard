@@ -986,7 +986,7 @@ export function registerRoutes(app: Express): Server {
       const { id } = req.params;
       const parsedId = parseInt(id);
 
-      // Get database connection details with instance
+      // Get database connection details
       const dbConnection = await db.query.databaseConnections.findFirst({
         where: eq(databaseConnections.id, parsedId),
         with: {
@@ -999,108 +999,81 @@ export function registerRoutes(app: Express): Server {
         },
       });
 
-      if (!dbConnection) {
+      if (!dbConnection || !dbConnection.instance) {
         return res.status(404).json({
-          message: "Database connection not found",
+          message: "Database connection or instance not found",
         });
       }
 
-      const instance = dbConnection.instance;
-      if (!instance) {
-        return res.status(404).json({
-          message: "Associated instance not found",
-        });
-      }
-
-      // Create client connection
       const client = new Client({
-        host: instance.hostname,
-        port: instance.port,
+        host: dbConnection.instance.hostname,
+        port: dbConnection.instance.port,
         user: dbConnection.username,
         password: dbConnection.password,
         database: dbConnection.databaseName,
         ssl: { rejectUnauthorized: false }
       });
 
-      try {
-        await client.connect();
+      await client.connect();
 
-        // Collect all metrics
-        const metrics = {
-          timestamp: new Date().toISOString(),
-          connections: 0,
-          databaseSize: 0,
-          slowQueries: 0,
-          cacheHitRatio: 0,
-          tableStats: [],
-          recentQueries: []
-        };
+      // Basic metrics that should work on any PostgreSQL instance
+      const baseMetrics = {
+        timestamp: new Date().toISOString(),
+        connections: 0,
+        databaseSize: '0',
+        slowQueries: 0,
+        cacheHitRatio: 0,
+        tableStats: [],
+      };
 
-        // Get active connections
-        const connectionsResult = await client.query(
-          "SELECT count(*) as count FROM pg_stat_activity WHERE state = 'active'"
-        );
-        metrics.connections = parseInt(connectionsResult.rows[0].count);
+      // Get active connections
+      const connectionsResult = await client.query(
+        "SELECT count(*) as count FROM pg_stat_activity WHERE datname = $1",
+        [dbConnection.databaseName]
+      );
+      baseMetrics.connections = parseInt(connectionsResult.rows[0].count);
 
-        // Get database size
-        const sizeResult = await client.query(
-          "SELECT pg_size_pretty(pg_database_size($1)) as size, pg_database_size($1) as bytes",
-          [dbConnection.databaseName]
-        );
-        metrics.databaseSize = parseInt(sizeResult.rows[0].bytes);
-        metrics.formattedSize = sizeResult.rows[0].size;
+      // Get database size
+      const sizeResult = await client.query(
+        "SELECT pg_size_pretty(pg_database_size($1)) as size",
+        [dbConnection.databaseName]
+      );
+      baseMetrics.databaseSize = sizeResult.rows[0].size;
 
-        // Get table statistics
-        const tableStatsResult = await client.query(`
-          SELECT 
-            schemaname,
-            relname as table_name,
-            n_live_tup as row_count,
-            pg_size_pretty(pg_total_relation_size(schemaname || '.' || relname)) as table_size,
-            pg_total_relation_size(schemaname || '.' || relname) as size_bytes
-          FROM pg_stat_user_tables 
-          WHERE schemaname = 'public'
-          ORDER BY pg_total_relation_size(schemaname || '.' || relname) DESC 
-          LIMIT 5
-        `);
-        metrics.tableStats = tableStatsResult.rows;
+      // Get table statistics
+      const tableStatsResult = await client.query(`
+        SELECT 
+          schemaname,
+          relname as table_name,
+          n_live_tup as row_count,
+          pg_size_pretty(pg_relation_size(schemaname || '.' || relname)) as size
+        FROM pg_stat_user_tables 
+        WHERE schemaname = 'public'
+        ORDER BY n_live_tup DESC 
+        LIMIT 5
+      `);
+      baseMetrics.tableStats = tableStatsResult.rows;
 
-        // Get cache hit ratio
-        const cacheResult = await client.query(`
-          SELECT 
-            sum(heap_blks_read) as heap_read,
-            sum(heap_blks_hit) as heap_hit,
-            CASE WHEN sum(heap_blks_hit) + sum(heap_blks_read) = 0 
-              THEN 0 
-              ELSE round(sum(heap_blks_hit)::numeric / (sum(heap_blks_hit) + sum(heap_blks_read))::numeric * 100, 2)
-            END as cache_hit_ratio
-          FROM pg_statio_user_tables
-        `);
-        metrics.cacheHitRatio = parseFloat(cacheResult.rows[0].cache_hit_ratio);
+      // Get basic cache statistics
+      const cacheResult = await client.query(`
+        SELECT 
+          sum(heap_blks_hit) as heap_hit,
+          sum(heap_blks_read) as heap_read
+        FROM pg_statio_user_tables
+      `);
 
-        // Get recent slow queries
-        const slowQueriesResult = await client.query(`
-          SELECT count(*) as count 
-          FROM pg_stat_activity 
-          WHERE state = 'active' 
-          AND now() - query_start > interval '1 second'
-        `);
-        metrics.slowQueries = parseInt(slowQueriesResult.rows[0].count);
+      const heapHit = parseInt(cacheResult.rows[0].heap_hit) || 0;
+      const heapRead = parseInt(cacheResult.rows[0].heap_read) || 0;
+      baseMetrics.cacheHitRatio = heapRead + heapHit === 0 
+        ? 0 
+        : Math.round((heapHit / (heapRead + heapHit)) * 100);
 
-        await client.end();
-        res.json(metrics);
-      } catch (error) {
-        console.error("Error collecting metrics:", error);
-        await client.end();
-        res.status(500).json({
-          message: "Error collecting database metrics",
-          error: error instanceof Error ? error.message : String(error)
-        });
-      }
+      await client.end();
+      res.json(baseMetrics);
     } catch (error) {
-      console.error("Metrics endpoint error:", error);
+      console.error("Metrics collection error:", error);
       res.status(500).json({
-        message: "Error in metrics endpoint",
+        message: "Failed to collect database metrics",
         error: error instanceof Error ? error.message : String(error)
       });
     }

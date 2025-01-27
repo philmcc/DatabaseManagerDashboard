@@ -168,23 +168,27 @@ export function registerRoutes(app: Express): Server {
     }
 
     try {
-      // For admin users, show all databases
-      // For other users, show only their own databases
-      const where = req.user.role === 'ADMIN'
-        ? undefined
-        : eq(databaseConnections.userId, req.user.id);
-
-      const userDatabases = await db.query.databaseConnections.findMany({
-        where,
+      const query = db.query.databaseConnections.findMany({
         with: {
           tags: {
             with: {
               tag: true,
             },
           },
-          instance: true,
+          instance: {
+            with: {
+              cluster: true,
+            },
+          },
         },
       });
+
+      // Apply filters based on user role
+      if (req.user.role !== 'ADMIN') {
+        query.where(eq(databaseConnections.userId, req.user.id));
+      }
+
+      const userDatabases = await query;
 
       // Transform response to include formatted instance details
       const formattedDatabases = userDatabases.map(db => ({
@@ -194,7 +198,11 @@ export function registerRoutes(app: Express): Server {
           hostname: db.instance.hostname,
           port: db.instance.port,
           description: db.instance.description,
-        } : null
+        } : null,
+        clusterDetails: db.instance?.cluster ? {
+          id: db.instance.cluster.id,
+          name: db.instance.cluster.name,
+        } : null,
       }));
 
       res.json(formattedDatabases);
@@ -211,22 +219,28 @@ export function registerRoutes(app: Express): Server {
 
     try {
       const { id } = req.params;
-      const database = await db.query.databaseConnections.findFirst({
-        where: req.user.role === 'ADMIN'
-          ? eq(databaseConnections.id, parseInt(id))
-          : and(
-              eq(databaseConnections.id, parseInt(id)),
-              eq(databaseConnections.userId, req.user.id)
-            ),
+      const query = db.query.databaseConnections.findFirst({
+        where: eq(databaseConnections.id, parseInt(id)),
         with: {
           tags: {
             with: {
               tag: true,
             },
           },
-          instance: true,
+          instance: {
+            with: {
+              cluster: true,
+            },
+          },
         },
       });
+
+      // Apply additional filters for non-admin users
+      if (req.user.role !== 'ADMIN') {
+        query.where(eq(databaseConnections.userId, req.user.id));
+      }
+
+      const database = await query;
 
       if (!database) {
         return res.status(404).send("Database not found");
@@ -240,7 +254,11 @@ export function registerRoutes(app: Express): Server {
           hostname: database.instance.hostname,
           port: database.instance.port,
           description: database.instance.description,
-        } : null
+        } : null,
+        clusterDetails: database.instance?.cluster ? {
+          id: database.instance.cluster.id,
+          name: database.instance.cluster.name,
+        } : null,
       };
 
       res.json(formattedDatabase);
@@ -1038,7 +1056,6 @@ export function registerRoutes(app: Express): Server {
           cacheHitRatio: metrics.cacheHitRatio,
           metrics: metrics,
         });
-
         // Get historical metrics
         const timeFilter = timeRange === '24h'
           ? sql`interval '24 hours'`

@@ -1025,79 +1025,83 @@ export function registerRoutes(app: Express): Server {
       try {
         await client.connect();
 
-        const metrics: any = {
-          timestamp: new Date(),
+        // Collect all metrics
+        const metrics = {
+          timestamp: new Date().toISOString(),
+          connections: 0,
+          databaseSize: 0,
+          slowQueries: 0,
+          cacheHitRatio: 0,
+          tableStats: [],
+          recentQueries: []
         };
 
-        try {
-          // Get active connections
-          const connectionsResult = await client.query(
-            "SELECT count(*) as count FROM pg_stat_activity WHERE state = 'active'"
-          );
-          metrics.activeConnections = parseInt(connectionsResult.rows[0].count);
+        // Get active connections
+        const connectionsResult = await client.query(
+          "SELECT count(*) as count FROM pg_stat_activity WHERE state = 'active'"
+        );
+        metrics.connections = parseInt(connectionsResult.rows[0].count);
 
-          // Get database size
-          const sizeResult = await client.query(
-            "SELECT pg_database_size($1) as size",
-            [dbConnection.databaseName]
-          );
-          metrics.databaseSize = parseInt(sizeResult.rows[0].size);
+        // Get database size
+        const sizeResult = await client.query(
+          "SELECT pg_size_pretty(pg_database_size($1)) as size, pg_database_size($1) as bytes",
+          [dbConnection.databaseName]
+        );
+        metrics.databaseSize = parseInt(sizeResult.rows[0].bytes);
+        metrics.formattedSize = sizeResult.rows[0].size;
 
-          // Get slow queries (queries taking more than 1000ms)
-          const slowQueriesResult = await client.query(
-            "SELECT count(*) as count FROM pg_stat_activity WHERE state = 'active' AND now() - query_start > interval '1 second'"
-          );
-          metrics.slowQueries = parseInt(slowQueriesResult.rows[0].count);
+        // Get table statistics
+        const tableStatsResult = await client.query(`
+          SELECT 
+            schemaname,
+            relname as table_name,
+            n_live_tup as row_count,
+            pg_size_pretty(pg_total_relation_size(schemaname || '.' || relname)) as table_size,
+            pg_total_relation_size(schemaname || '.' || relname) as size_bytes
+          FROM pg_stat_user_tables 
+          WHERE schemaname = 'public'
+          ORDER BY pg_total_relation_size(schemaname || '.' || relname) DESC 
+          LIMIT 5
+        `);
+        metrics.tableStats = tableStatsResult.rows;
 
-          // Get table statistics
-          const tableStatsResult = await client.query(`
-            SELECT 
-              schemaname,
-              relname as tablename,
-              n_live_tup as row_count,
-              n_dead_tup as dead_tuples
-            FROM pg_stat_user_tables
-            ORDER BY n_live_tup DESC
-            LIMIT 10
-          `);
-          metrics.tableStats = tableStatsResult.rows;
+        // Get cache hit ratio
+        const cacheResult = await client.query(`
+          SELECT 
+            sum(heap_blks_read) as heap_read,
+            sum(heap_blks_hit) as heap_hit,
+            CASE WHEN sum(heap_blks_hit) + sum(heap_blks_read) = 0 
+              THEN 0 
+              ELSE round(sum(heap_blks_hit)::numeric / (sum(heap_blks_hit) + sum(heap_blks_read))::numeric * 100, 2)
+            END as cache_hit_ratio
+          FROM pg_statio_user_tables
+        `);
+        metrics.cacheHitRatio = parseFloat(cacheResult.rows[0].cache_hit_ratio);
 
-          // Get cache hit ratio
-          const cacheResult = await client.query(`
-            SELECT 
-              sum(heap_blks_read) as heap_read,
-              sum(heap_blks_hit) as heap_hit
-            FROM pg_statio_user_tables
-          `);
+        // Get recent slow queries
+        const slowQueriesResult = await client.query(`
+          SELECT count(*) as count 
+          FROM pg_stat_activity 
+          WHERE state = 'active' 
+          AND now() - query_start > interval '1 second'
+        `);
+        metrics.slowQueries = parseInt(slowQueriesResult.rows[0].count);
 
-          const heapRead = parseInt(cacheResult.rows[0].heap_read);
-          const heapHit = parseInt(cacheResult.rows[0].heap_hit);
-          metrics.cacheHitRatio = heapRead + heapHit ===0
-            ? 0
-            : (heapHit / (heapRead + heapHit)) * 100;
-
-          await client.end();
-          res.json(metrics);
-        } catch (error) {
-          console.error("Error fetching metrics:", error);
-          await client.end();
-          res.status(500).json({
-            message: "Error fetching database metrics",
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
+        await client.end();
+        res.json(metrics);
       } catch (error) {
-        console.error("Connection error:", error);
+        console.error("Error collecting metrics:", error);
+        await client.end();
         res.status(500).json({
-          message: "Error connecting to database",
-          error: error instanceof Error ? error.message : String(error),
+          message: "Error collecting database metrics",
+          error: error instanceof Error ? error.message : String(error)
         });
       }
     } catch (error) {
       console.error("Metrics endpoint error:", error);
       res.status(500).json({
         message: "Error in metrics endpoint",
-        error: error instanceof Error ? error.message : String(error),
+        error: error instanceof Error ? error.message : String(error)
       });
     }
   });

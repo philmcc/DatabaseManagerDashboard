@@ -1070,7 +1070,7 @@ export function registerRoutes(app: Express): Server {
             n_live_tup as row_count,
             pg_size_pretty(pg_relation_size(schemaname || '.' || relname)) as size
           FROM pg_stat_user_tables 
-          ORDER BY n_live_tup DESC 
+          ORDER BY n_livetup DESC 
           LIMIT 5;
         `);
         metrics.tableStats = tableStatsResult.rows;
@@ -1909,12 +1909,12 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  // Add cluster health check execution endpoint
+  // Add cluster health check execution endpoint from edited snippet
   app.post("/api/health-check-executions", requireAuth, async (req, res) => {
     try {
       const { clusterId } = req.body;
 
-      // Create a new execution record
+      // Create execution record
       const [execution] = await db
         .insert(healthCheckExecutions)
         .values({
@@ -1924,30 +1924,29 @@ export function registerRoutes(app: Express): Server {
         })
         .returning();
 
-      // Get active queries
+      // Get active queries ordered by display order
       const queries = await db
         .select()
         .from(healthCheckQueries)
-        .where(sql`${healthCheckQueries.active} = true`)
+        .where(eq(healthCheckQueries.active, true))
         .orderBy(healthCheckQueries.displayOrder);
 
       // Get cluster instances
-      const instances = await db
+      const clusterInstances = await db
         .select()
         .from(instances)
         .where(eq(instances.clusterId, parseInt(clusterId)));
 
-      // For each query and applicable instance, create a result record
+      const results = [];
       for (const query of queries) {
         // If query should run on all instances, run it on all of them
         // Otherwise, only run on writer instance
         const targetInstances = query.runOnAllInstances
-          ? instances
-          : instances.filter(instance => instance.isWriter);
+          ? clusterInstances
+          : clusterInstances.filter(instance => instance.isWriter);
 
         for (const instance of targetInstances) {
           try {
-            // Create a client for this instance
             const client = new Client({
               host: instance.hostname,
               port: instance.port,
@@ -1958,31 +1957,34 @@ export function registerRoutes(app: Express): Server {
             });
 
             await client.connect();
-
-            // Execute the query
             const queryResult = await client.query(query.query);
             await client.end();
 
-            // Store the results
-            await db.insert(healthCheckResults).values({
+            results.push({
               execution_id: execution.id,
               query_id: query.id,
               instance_id: instance.id,
               results: queryResult.rows,
+              executedAt: new Date(),
             });
           } catch (error: any) {
-            // Store the error
-            await db.insert(healthCheckResults).values({
+            results.push({
               execution_id: execution.id,
               query_id: query.id,
               instance_id: instance.id,
               error: error.message,
+              executedAt: new Date(),
             });
           }
         }
       }
 
-      // Update execution status to completed
+      // Save results
+      if (results.length > 0) {
+        await db.insert(healthCheckResults).values(results);
+      }
+
+      // Update execution status
       const [updatedExecution] = await db
         .update(healthCheckExecutions)
         .set({
@@ -1994,26 +1996,24 @@ export function registerRoutes(app: Express): Server {
 
       // Generate markdown report
       let markdownReport = `# Health Check Report\n\n`;
-      markdownReport += `## Summary\n`;
-      markdownReport += `- Cluster: ${(await db.query.clusters.findFirst({ where: eq(clusters.id, parseInt(clusterId)) }))?.name}\n`;
-      markdownReport += `- Started: ${execution.startedAt}\n`;
-      markdownReport += `- Completed: ${updatedExecution.completedAt}\n\n`;
+      markdownReport += `Generated: ${new Date().toLocaleString()}\n\n`;
 
-      // Get all results for this execution
-      const results = await db.query.healthCheckResults.findMany({
-        where: eq(healthCheckResults.execution_id, execution.id),
-        with: {
-          query: true,
-          instance: true,
-        },
-      });
-
-      // Group results by query
+      // Group results by query title
       const resultsByQuery = results.reduce((acc: any, result) => {
-        if (!acc[result.query.title]) {
-          acc[result.query.title] = [];
+        const query = queries.find(q => q.id === result.query_id);
+        const instance = clusterInstances.find(i => i.id === result.instance_id);
+
+        if (!query || !instance) return acc;
+
+        if (!acc[query.title]) {
+          acc[query.title] = [];
         }
-        acc[result.query.title].push(result);
+
+        acc[query.title].push({
+          ...result,
+          instance
+        });
+
         return acc;
       }, {});
 

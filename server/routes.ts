@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { setupAuth } from "./auth";
 import { db } from "@db";
-import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics, clusters, instances, healthCheckQueries, healthCheckExecutions, healthCheckQueryResults, healthCheckReports } from "@db/schema";
+import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics, clusters, instances, healthCheckQueries, healthCheckExecutions, healthCheckResults, healthCheckReports } from "@db/schema";
 import { eq, and, ne, sql, desc, asc } from "drizzle-orm";
 import pkg from 'pg';
 const { Client } = pkg;
@@ -1072,8 +1072,7 @@ export function registerRoutes(app: Express): Server {
           FROM pg_stat_user_tables 
           ORDER BY n_livetup DESC 
           LIMIT 5;
-        `);
-        metrics.tableStats = tableStatsResult.rows;
+        `);        metrics.tableStats = tableStatsResult.rows;
         console.log('Table statistics:', metrics.tableStats);
 
         console.log('Collecting cache statistics');
@@ -2025,12 +2024,11 @@ export function registerRoutes(app: Express): Server {
           markdownReport += `### Instance: ${result.instance.hostname}:${result.instance.port}\n\n`;
 
           if (result.error) {
-            markdownReport += `❌ Error: ${result.error}\n\n`;
+            markdownReport += `❌Error: ${result.error}\n\n`;
           } else if (result.results && result.results.length > 0) {
             // Create table header
             const headers = Object.keys(result.results[0]);
-            markdownReport += `| ${headers.join(' | ')} |\n`;
-            markdownReport += `| ${headers.map(() => '---').join(' | ')} |\n`;
+            markdownReport += `| ${headers.join(' | ')} |\\n| ${headers.map(() => '---').join(' | ')} |\n`;
 
             // Add table rows
             for (const row of result.results) {

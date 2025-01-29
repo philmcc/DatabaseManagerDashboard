@@ -13,17 +13,38 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 
+interface HealthCheckResult {
+  queryId: number;
+  query: {
+    title: string;
+  };
+  error?: string;
+  results: Array<Record<string, any>>;
+  instance?: {
+    hostname: string;
+    port: number;
+  };
+}
+
+interface HealthCheckExecution {
+  id: number;
+  status: string;
+  startedAt: string;
+  completedAt?: string;
+  results: HealthCheckResult[];
+}
+
 export default function HealthCheckReports() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
   // Fetch the latest execution
-  const { data: latestExecution, isLoading: isLoadingLatest } = useQuery({
+  const { data: latestExecution, isLoading: isLoadingLatest } = useQuery<HealthCheckExecution>({
     queryKey: ['/api/health-check-executions/latest'],
   });
 
   // Fetch all executions
-  const { data: executions = [], isLoading: isLoadingExecutions } = useQuery({
+  const { data: executions = [], isLoading: isLoadingExecutions } = useQuery<HealthCheckExecution[]>({
     queryKey: ['/api/health-check-executions'],
   });
 
@@ -74,11 +95,11 @@ export default function HealthCheckReports() {
             </Button>
           </div>
 
-          {latestExecution && (
+          {latestExecution && latestExecution.results && latestExecution.results.length > 0 ? (
             <>
               <h3 className="text-lg font-semibold mb-4">Latest Results</h3>
               <Accordion type="single" collapsible className="mb-8">
-                {latestExecution.results.map((result: any) => (
+                {latestExecution.results.map((result: HealthCheckResult) => (
                   <AccordionItem
                     key={result.queryId}
                     value={result.queryId.toString()}
@@ -102,7 +123,7 @@ export default function HealthCheckReports() {
                       <div className="p-4">
                         {result.error ? (
                           <div className="text-red-600">{result.error}</div>
-                        ) : (
+                        ) : result.results && result.results.length > 0 ? (
                           <div className="overflow-x-auto">
                             <Table>
                               <TableHeader>
@@ -140,6 +161,8 @@ export default function HealthCheckReports() {
                               </TableBody>
                             </Table>
                           </div>
+                        ) : (
+                          <div>No results available</div>
                         )}
                       </div>
                     </AccordionContent>
@@ -147,6 +170,8 @@ export default function HealthCheckReports() {
                 ))}
               </Accordion>
             </>
+          ) : (
+            <div className="text-muted-foreground">No health check results available</div>
           )}
 
           <h3 className="text-lg font-semibold mb-4">Execution History</h3>
@@ -161,7 +186,7 @@ export default function HealthCheckReports() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {executions.map((execution: any) => (
+                {executions.map((execution: HealthCheckExecution) => (
                   <TableRow key={execution.id}>
                     <TableCell>
                       {format(new Date(execution.startedAt), 'PPpp')}

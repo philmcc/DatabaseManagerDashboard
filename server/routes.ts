@@ -1070,7 +1070,7 @@ export function registerRoutes(app: Express): Server {
             n_live_tup as row_count,
             pg_size_pretty(pg_relation_size(schemaname || '.' || relname)) as size
           FROM pg_stat_user_tables          ORDER BY n_livetup DESC 
-          LIMIT 5;
+                    LIMIT 5;
         `);        metrics.tableStats = tableStatsResult.rows;
         console.log('Table statistics:', metrics.tableStats);
 
@@ -1913,12 +1913,15 @@ export function registerRoutes(app: Express): Server {
       const { clusterId } = req.body;
 
       if (!clusterId) {
+        console.log('Error: No cluster ID provided');
         return res.status(400).json({ message: "Cluster ID is required" });
       }
 
-      console.log('Starting health check execution for cluster:', clusterId);
+      console.log('=== Starting Health Check Execution ===');
+      console.log(`Cluster ID: ${clusterId}`);
+      console.log(`User ID: ${req.user!.id}`);
 
-      // Get cluster details
+      // Get cluster details with instances
       const cluster = await db.query.clusters.findFirst({
         where: eq(clusters.id, clusterId),
         with: {
@@ -1927,17 +1930,26 @@ export function registerRoutes(app: Express): Server {
       });
 
       if (!cluster) {
+        console.log('Error: Cluster not found');
         return res.status(404).json({ message: "Cluster not found" });
       }
 
-      console.log('Found cluster with instances:', cluster.instances.length);
+      console.log(`Found cluster: ${cluster.name}`);
+      console.log(`Number of instances: ${cluster.instances.length}`);
+      cluster.instances.forEach(instance => {
+        console.log(`- Instance: ${instance.hostname}:${instance.port} (Writer: ${instance.isWriter})`);
+      });
 
       // Get active queries
       const activeQueries = await db.query.healthCheckQueries.findMany({
         where: eq(healthCheckQueries.active, true),
+        orderBy: [asc(healthCheckQueries.displayOrder)],
       });
 
-      console.log('Found active queries:', activeQueries.length);
+      console.log(`Found ${activeQueries.length} active queries:`);
+      activeQueries.forEach(query => {
+        console.log(`- Query: ${query.title} (Run on all instances: ${query.runOnAllInstances})`);
+      });
 
       // Create execution record
       const [execution] = await db
@@ -1949,22 +1961,30 @@ export function registerRoutes(app: Express): Server {
         })
         .returning();
 
-      console.log('Created execution record:', execution.id);
+      console.log(`Created execution record ID: ${execution.id}`);
 
       const results = [];
+      let markdownReport = `# Health Check Report\n\n`;
+      markdownReport += `## Cluster: ${cluster.name}\n\n`;
+      markdownReport += `Generated: ${new Date().toLocaleString()}\n\n`;
 
-      // Execute each query on appropriate instances
+      // Execute each query
       for (const query of activeQueries) {
-        console.log('Executing query:', query.title);
+        console.log(`\nExecuting query: ${query.title}`);
+        markdownReport += `\n### ${query.title}\n\n`;
 
+        // Determine target instances
         const targetInstances = query.runOnAllInstances
           ? cluster.instances
           : cluster.instances.filter(i => i.isWriter);
 
-        for (const instance of targetInstances) {
-          try {
-            console.log('Connecting to instance:', instance.hostname, instance.port);
+        console.log(`Running on ${targetInstances.length} instances (${query.runOnAllInstances ? 'all' : 'writer only'})`);
 
+        for (const instance of targetInstances) {
+          console.log(`\nConnecting to instance: ${instance.hostname}:${instance.port}`);
+          markdownReport += `\n#### Instance: ${instance.hostname}:${instance.port}\n\n`;
+
+          try {
             const client = new Client({
               host: instance.hostname,
               port: instance.port,
@@ -1974,41 +1994,73 @@ export function registerRoutes(app: Express): Server {
               ssl: { rejectUnauthorized: false }
             });
 
+            console.log('Attempting database connection...');
             await client.connect();
-            console.log('Connected to instance successfully');
+            console.log('Connected successfully');
 
+            console.log('Executing query:', query.query);
             const queryResult = await client.query(query.query);
+            console.log(`Query executed successfully. Rows returned: ${queryResult.rows.length}`);
+
             await client.end();
+            console.log('Database connection closed');
 
-            console.log('Query executed successfully');
-
+            // Add results to array
             results.push({
               execution_id: execution.id,
               query_id: query.id,
               instance_id: instance.id,
               results: queryResult.rows,
             });
+
+            // Add results to markdown report
+            if (queryResult.rows.length > 0) {              // Create markdown table header
+              const headers = Object.keys(queryResult.rows[0]);
+              markdownReport += `| ${headers.join(' | ')} |\n`;
+              markdownReport += `| ${headers.map(() => '---').join(' | ')} |\n`;
+
+              // Add table rows
+              queryResult.rows.forEach(row => {
+                markdownReport += `| ${headers.map(header => row[header] || '').join(' | ')} |\n`;
+              });
+              markdownReport += '\n';
+            } else {
+              markdownReport += 'No results returned\n\n';
+            }
+
           } catch (error) {
             console.error('Query execution error:', error);
 
+            const errorMessage = error instanceof Error ? error.message : String(error);
             results.push({
               execution_id: execution.id,
               query_id: query.id,
               instance_id: instance.id,
-              error: error instanceof Error ? error.message : String(error),
+              error: errorMessage,
             });
+
+            markdownReport += `❌ Error: ${errorMessage}\n\n`;
           }
         }
       }
 
-      console.log('All queries executed, saving results');
-
+      console.log('\nSaving query results...');
       // Save results
       if (results.length > 0) {
         await db.insert(healthCheckResults).values(results);
+        console.log(`Saved ${results.length} results`);
       }
 
-      console.log('Results saved successfully');
+      // Save report
+      console.log('Saving markdown report...');
+      await db.insert(healthCheckReports).values({
+        cluster_id: clusterId,
+        user_id: req.user!.id,
+        status: 'completed',
+        markdown: markdownReport,
+        completedAt: new Date(),
+      });
+      console.log('Report saved successfully');
 
       // Update execution status
       const [updatedExecution] = await db
@@ -2019,6 +2071,8 @@ export function registerRoutes(app: Express): Server {
         })
         .where(eq(healthCheckExecutions.id, execution.id))
         .returning();
+
+      console.log('Execution marked as completed');
 
       // Return the execution with results
       const finalExecution = {
@@ -2041,6 +2095,7 @@ export function registerRoutes(app: Express): Server {
         }),
       };
 
+      console.log('=== Health Check Execution Completed ===');
       res.json(finalExecution);
     } catch (error) {
       console.error("Health check execution error:", error);
@@ -2050,7 +2105,6 @@ export function registerRoutes(app: Express): Server {
       });
     }
   });
-
   // Get latest execution for a cluster
   app.get("/api/health-check-executions/latest", requireAuth, async (req, res) => {
     try {

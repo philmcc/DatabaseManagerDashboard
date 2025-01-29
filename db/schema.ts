@@ -190,9 +190,9 @@ export const healthCheckQueries = pgTable("health_check_queries", {
   runOnAllInstances: boolean("run_on_all_instances").default(false).notNull(),
   active: boolean("active").default(true).notNull(),
   displayOrder: integer("display_order").notNull(),
-  userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
-  createdAt: timestamp("createdAt").defaultNow(),
-  updatedAt: timestamp("updatedAt").defaultNow(),
+  user_id: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 export const healthCheckExecutions = pgTable("health_check_executions", {
@@ -200,17 +200,17 @@ export const healthCheckExecutions = pgTable("health_check_executions", {
   status: text("status").notNull(), // running, completed, failed
   startedAt: timestamp("started_at").defaultNow(),
   completedAt: timestamp("completed_at"),
-  userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
-  clusterId: integer("cluster_id").notNull().references(() => clusters.id, { onDelete: 'cascade' }),
-  createdAt: timestamp("createdAt").defaultNow(),
-  updatedAt: timestamp("updatedAt").defaultNow(),
+  user_id: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  cluster_id: integer("cluster_id").notNull().references(() => clusters.id, { onDelete: 'cascade' }),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 export const healthCheckResults = pgTable("health_check_results", {
   id: serial("id").primaryKey(),
-  executionId: integer("execution_id").notNull().references(() => healthCheckExecutions.id, { onDelete: 'cascade' }),
-  queryId: integer("query_id").notNull().references(() => healthCheckQueries.id, { onDelete: 'cascade' }),
-  instanceId: integer("instance_id").notNull().references(() => instances.id, { onDelete: 'cascade' }),
+  execution_id: integer("execution_id").notNull().references(() => healthCheckExecutions.id, { onDelete: 'cascade' }),
+  query_id: integer("query_id").notNull().references(() => healthCheckQueries.id, { onDelete: 'cascade' }),
+  instance_id: integer("instance_id").notNull().references(() => instances.id, { onDelete: 'cascade' }),
   results: jsonb("results"),
   error: text("error"),
   executedAt: timestamp("executed_at").defaultNow(),
@@ -218,19 +218,19 @@ export const healthCheckResults = pgTable("health_check_results", {
 
 export const healthCheckReports = pgTable("health_check_reports", {
   id: serial("id").primaryKey(),
-  clusterId: integer("cluster_id").notNull().references(() => clusters.id, { onDelete: 'cascade' }),
-  userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  cluster_id: integer("cluster_id").notNull().references(() => clusters.id, { onDelete: 'cascade' }),
+  user_id: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
   status: text("status").notNull(), // running, completed, failed
   markdown: text("markdown"),
   completedAt: timestamp("completed_at"),
-  createdAt: timestamp("createdAt").defaultNow(),
-  updatedAt: timestamp("updatedAt").defaultNow(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 // Health check system relations
 export const healthCheckQueriesRelations = relations(healthCheckQueries, ({ one, many }) => ({
   user: one(users, {
-    fields: [healthCheckQueries.userId],
+    fields: [healthCheckQueries.user_id],
     references: [users.id],
   }),
   results: many(healthCheckResults),
@@ -238,11 +238,11 @@ export const healthCheckQueriesRelations = relations(healthCheckQueries, ({ one,
 
 export const healthCheckExecutionsRelations = relations(healthCheckExecutions, ({ one, many }) => ({
   user: one(users, {
-    fields: [healthCheckExecutions.userId],
+    fields: [healthCheckExecutions.user_id],
     references: [users.id],
   }),
   cluster: one(clusters, {
-    fields: [healthCheckExecutions.clusterId],
+    fields: [healthCheckExecutions.cluster_id],
     references: [clusters.id],
   }),
   results: many(healthCheckResults),
@@ -250,26 +250,26 @@ export const healthCheckExecutionsRelations = relations(healthCheckExecutions, (
 
 export const healthCheckResultsRelations = relations(healthCheckResults, ({ one }) => ({
   execution: one(healthCheckExecutions, {
-    fields: [healthCheckResults.executionId],
+    fields: [healthCheckResults.execution_id],
     references: [healthCheckExecutions.id],
   }),
   query: one(healthCheckQueries, {
-    fields: [healthCheckResults.queryId],
+    fields: [healthCheckResults.query_id],
     references: [healthCheckQueries.id],
   }),
   instance: one(instances, {
-    fields: [healthCheckResults.instanceId],
+    fields: [healthCheckResults.instance_id],
     references: [instances.id],
   }),
 }));
 
 export const healthCheckReportsRelations = relations(healthCheckReports, ({ one }) => ({
   user: one(users, {
-    fields: [healthCheckReports.userId],
+    fields: [healthCheckReports.user_id],
     references: [users.id],
   }),
   cluster: one(clusters, {
-    fields: [healthCheckReports.clusterId],
+    fields: [healthCheckReports.cluster_id],
     references: [clusters.id],
   }),
 }));

@@ -1071,25 +1071,19 @@ export function registerRoutes(app: Express): Server {
             n_live_tup as row_count,
             pg_size_pretty(pg_relation_size(schemaname || '.' || relname)) as size
           FROM pg_stat_user_tables 
-          WHERE schemaname`
-          ORDERBY nlive_tup DESC 
+          ORDER BY n_live_tup DESC 
           LIMIT 5
         `);
         metrics.tableStats = tableStatsResult.rows;
         console.log('Table statistics:', metrics.tableStats);
 
         console.log('Collecting cache statistics');
-        const cacheResult = await client.query(`
-          SELECT 
-            COALESCE(sum(heap_blks_hit), 0) as heap_hit,
-            COALESCE(sum(heap_blks_read), 0) as heap_read
-          FROM pg_statio_user_tables
-        `);
+        const cacheResult = await client.query(databaseMetricsQueries.bufferCacheHitRatio);
 
         const heapHit = parseInt(cacheResult.rows[0].heap_hit);
         const heapRead = parseInt(cacheResult.rows[0].heap_read);
-        metrics.cacheHitRatio = heapRead + heapHit === 0 
-          ? 0 
+        metrics.cacheHitRatio = heapRead + heapHit === 0
+          ? 0
           : Math.round((heapHit / (heapRead + heapHit)) * 100);
         console.log('Cache hit ratio:', metrics.cacheHitRatio);
 
@@ -1299,15 +1293,7 @@ export function registerRoutes(app: Express): Server {
 
             // Database sizes
             try {
-              const dbSizesResult = await masterClient.query(`
-                SELECT 
-                  datname AS database,
-                  pg_size_pretty(pg_database_size(datname)) AS size,
-                  pg_size_pretty(pg_tablespace_size('pg_default')) AS tablespace_size
-                FROM pg_database
-                WHERE datname NOT IN ('template0', 'template1')
-                ORDER BY pg_database_size(datname) DESC;
-              `);
+              const dbSizesResult = await masterClient.query(databaseMetricsQueries.databaseSizes);
 
               results.push({
                 id: results.length + 1,
@@ -1336,34 +1322,22 @@ export function registerRoutes(app: Express): Server {
 
             // Transaction ID Wraparound Check
             try {
-              const wraparoundResult = await masterClient.query(`
-                SELECT 
-                  n.nspname as schema,
-                  c.relname as table,
-                  age(c.relfrozenxid) as xid_age,
-                  current_setting('autovacuum_freeze_max_age')::integer as max_age
-                FROM pg_class c
-                JOIN pg_namespace n on c.relnamespace = n.oid
-                WHERE c.relkind = 'r'
-                AND age(c.relfrozenxid) > current_setting('autovacuum_freeze_max_age')::integer * 0.75
-                ORDER BY age(c.relfrozenxid) DESC
-                LIMIT 20;
-              `);
+              const wraparoundResult = await masterClient.query(databaseMetricsQueries.transactionWraparound);
 
               results.push({
                 id: results.length + 1,
                 checkName: 'transaction_wraparound',
                 title: 'Transaction ID Wraparound Risk',
-                status: wraparoundResult.rows.length > 0 ? 'warning' : 'success',
+                status: wraparoundResult.rows.some(row => row.status !== 'ok') ? 'warning' : 'success',
                 details: wraparoundResult.rows,
                 description: 'Objects approaching transaction ID wraparound'
               });
 
               markdown += "\n## Transaction ID Wraparound Risk\n\n";
               if (wraparoundResult.rows.length > 0) {
-                markdown += "| Schema | Table | XID Age | Max Age |\n|---------|-------|----------|----------|\n";
+                markdown += "| Schema | Table | XID Age | % Towards Wraparound | Status |\n|---------|-------|----------|-----------------------|--------|\n";
                 wraparoundResult.rows.forEach(row => {
-                  markdown += `| ${row.schema} | ${row.table} | ${row.xid_age} | ${row.max_age} |\n`;
+                  markdown += `| ${row.schema} | ${row.table} | ${row.xid_age} | ${row.perc_towards_wraparound} | ${row.status} |\n`;
                 });
               } else {
                 markdown += "No tables at risk of transaction ID wraparound.\n";
@@ -1381,18 +1355,7 @@ export function registerRoutes(app: Express): Server {
 
             // Dead Tuples Check
             try {
-              const deadTuplesResult = await masterClient.query(`
-                SELECT 
-                  schemaname as schema,
-                  relname as table,
-                  n_dead_tup as dead_tuples,
-                  n_live_tup as live_tuples,
-                  round(n_dead_tup::numeric / NULLIF(n_live_tup, 0) * 100, 2) as dead_tuples_ratio
-                FROM pg_stat_user_tables
-                WHERE n_dead_tup > 0
-                ORDER BY n_dead_tup DESC
-                LIMIT 20;
-              `);
+              const deadTuplesResult = await masterClient.query(databaseMetricsQueries.deadTuples);
 
               results.push({
                 id: results.length + 1,
@@ -1421,82 +1384,7 @@ export function registerRoutes(app: Express): Server {
 
             // Heap Bloat Check
             try {
-              const heapBloatResult = await masterClient.query(`
-                WITH constants AS (
-                  SELECT current_setting('block_size')::numeric AS bs, 23 AS hdr, 8 AS ma
-                ),
-                no_stats AS (
-                  SELECT table_schema, table_name, 
-                         n_live_tup::numeric as est_rows,
-                         pg_table_size(relid)::numeric as table_size
-                  FROM information_schema.tables
-                  JOIN pg_stat_user_tables as psut
-                     ON table_schema = schemaname
-                     AND table_name = relname
-                  LEFT OUTER JOIN pg_stats
-                  ON table_schema = schemaname
-                     AND table_name = relname
-                  WHERE table_type = 'BASE TABLE'
-                ),
-                null_headers AS (
-                  SELECT
-                    hdr+1+(sum(case when null_frac <> 0 THEN 1 else 0 END)/8) as nullhdr,
-                    SUM((1-null_frac)*avg_width) as datawidth,
-                    MAX(null_frac) as maxfrac,
-                    schemaname,
-                    tablename,
-                    hdr
-                  FROM pg_stats CROSS JOIN constants
-                  GROUP BY schemaname, tablename, hdr
-                ),
-                table_bloat AS (
-                  SELECT
-                    schemaname as schema,
-                    tablename as table,
-                    ROUND(CASE WHEN avgrowwidth.avgrowwidth = 0 OR tablename IS NULL
-                      THEN 0.0
-                      ELSE bs*notnull.count/(avgrowwidth.avgrowwidth + hdr)
-                      END) AS expected_bytes,
-                    CASE WHEN tablename IS NULL
-                      THEN 0
-                      ELSE pg_relation_size(schemaname || '.' || tablename)
-                      END AS actual_bytes,
-                    pg_size_pretty(
-                      CASE WHEN tablename IS NULL
-                        THEN 0
-                        ELSE pg_relation_size(schemaname || '.' || tablename)
-                        END - (bs*notnull.count/(avgrowwidth.avgrowwidth + hdr))
-                    ) AS bloat_size
-                  FROM
-                    (SELECT
-                      schemaname,
-                      tablename,
-                      hdr,
-                      SUM((1-s.null_frac)*s.avg_width)::numeric AS avgrowwidth
-                    FROM pg_stats s
-                    CROSS JOIN constants
-                    GROUP BY 1,2,3
-                    ) AS avgrowwidth
-                    CROSS JOIN constants
-                    CROSS JOIN
-                    (SELECT
-                      schemaname,
-                      tablename,
-                      SUM(n_live_tup) AS count
-                    FROM pg_stat_user_tables
-                    GROUP BY 1,2
-                    ) AS notnull
-                  WHERE notnull.schemaname = avgrowwidth.schemaname
-                    AND notnull.tablename = avgrowwidth.tablename
-                )
-                SELECT *,
-                  ROUND(100*(actual_bytes-expected_bytes)::numeric/nullif(actual_bytes, 0), 2) as bloat_ratio
-                FROM table_bloat
-                WHERE actual_bytes > 0
-                  AND (actual_bytes-expected_bytes)::numeric/nullif(actual_bytes, 0) > 0.2
-                ORDER BY bloat_ratio DESC
-                LIMIT 20;
-              `);
+              const heapBloatResult = await masterClient.query(databaseMetricsQueries.tableBloat);
 
               results.push({
                 id: results.length + 1,
@@ -1508,9 +1396,9 @@ export function registerRoutes(app: Express): Server {
               });
 
               markdown += "\n## Heap Bloat Analysis\n\n";
-              markdown += "| Schema | Table | Expected Size | Actual Size | Bloat Size | Bloat Ratio (%) |\n|---------|-------|---------------|-------------|------------|----------------|\n";
+              markdown += "| Schema | Table | Bloat Size | Bloat Ratio (%) |\n|---------|-------|-------------|----------------|\n";
               heapBloatResult.rows.forEach(row => {
-                markdown += `| ${row.schema} | ${row.table} | ${row.expected_bytes} | ${row.actual_bytes} | ${row.bloat_size} | ${row.bloat_ratio} |\n`;
+                markdown += `| ${row.schema} | ${row.table} | ${row.bloat_size} | ${row.bloat_ratio} |\n`;
               });
             } catch (error) {
               results.push({
@@ -1569,20 +1457,7 @@ export function registerRoutes(app: Express): Server {
 
             // Non-indexed Foreign Keys Check
             try {
-              const nonIndexedFKsResult = await masterClient.query(`
-                SELECT DISTINCT
-                  conrelid::regclass AS table,
-                  a.attname AS column,
-                  conname AS foreign_key,
-                  confrelid::regclass AS referenced_table
-                FROM pg_constraint c
-                JOIN pg_attribute a ON a.attnum = ANY(c.conkey) AND a.attrelid = c.conrelid
-                LEFT JOIN pg_index i ON c.conrelid = i.indrelid 
-                  AND a.attnum = ANY(i.indkey)
-                WHERE c.contype = 'f'
-                  AND i.indrelid IS NULL
-                ORDER BY conrelid::regclass::text, a.attname;
-              `);
+              const nonIndexedFKsResult = await masterClient.query(databaseMetricsQueries.missingForeignKeys);
 
               results.push({
                 id: results.length + 1,
@@ -1629,21 +1504,7 @@ export function registerRoutes(app: Express): Server {
 
                 // Unused and Rarely Used Indexes
                 try {
-                  const indexUsageResult = await instanceClient.query(`
-                    SELECT
-                      schemaname as schema,
-                      tablename as table,
-                      indexname as index,
-                      idx_scan as scans,
-                      idx_tup_read as tuples_read,
-                      idx_tup_fetch as tuples_fetched,
-                      pg_size_pretty(pg_relation_size(indexrelid::regclass)) as index_size
-                    FROM pg_stat_user_indexes
-                    WHERE idx_scan < 50
-                    AND schemaname NOT IN ('pg_catalog', 'pg_toast')
-                    ORDER BY idx_scan ASC, pg_relation_size(indexrelid::regclass) DESC
-                    LIMIT 50;
-                  `);
+                  const indexUsageResult = await instanceClient.query(databaseMetricsQueries.unusedIndexes);
 
                   results.push({
                     id: results.length + 1,
@@ -1659,9 +1520,9 @@ export function registerRoutes(app: Express): Server {
                   });
 
                   markdown += `\n## Index Usage Analysis - ${instance.hostname}:${instance.port}\n\n`;
-                  markdown += "| Schema | Table | Index | Scans | Tuples Read | Tuples Fetched | Size |\n|---------|-------|-------|--------|-------------|----------------|------|\n";
+                  markdown += "| Schema | Table | Index | Size |\n|---------|-------|-------|------|\n";
                   indexUsageResult.rows.forEach(row => {
-                    markdown += `| ${row.schema} | ${row.table} | ${row.index} | ${row.scans} | ${row.tuples_read} | ${row.tuples_fetched} | ${row.index_size} |\n`;
+                    markdown += `| ${row.schema} | ${row.table} | ${row.index} | ${row.index_size} |\n`;
                   });
                 } catch (error) {
                   results.push({
@@ -1995,3 +1856,130 @@ export function registerRoutes(app: Express): Server {
   const httpServer = createServer(app);
   return httpServer;
 }
+
+const databaseMetricsQueries = {
+  bufferCacheHitRatio: `
+    SELECT 
+      COALESCE(sum(heap_blks_hit), 0) as heap_hit,
+      COALESCE(sum(heap_blks_read), 0) as heap_read
+    FROM pg_statio_user_tables;
+  `,
+
+  databaseSizes: `
+    SELECT 
+      datname AS database,
+      pg_size_pretty(pg_database_size(datname)) AS size,
+      pg_size_pretty(pg_tablespace_size('pg_default')) AS tablespace_size
+    FROM pg_database
+    WHERE datname NOT IN ('template0', 'template1', 'postgres')
+    ORDER BY pg_database_size(datname) DESC;
+  `,
+
+  transactionWraparound: `
+    SELECT 
+      n.nspname as schema,
+      c.relname as table,
+      age(c.relfrozenxid) as xid_age,
+      ROUND((age(c.relfrozenxid) / 2000000000::float4)::numeric, 1) as perc_towards_wraparound,
+      CASE
+        WHEN age(c.relfrozenxid) > 1500000000 THEN 'critical'
+        WHEN age(c.relfrozenxid) > 1000000000 THEN 'warning'
+        ELSE 'ok'
+      END as status
+    FROM pg_class c
+    JOIN pg_namespace n ON c.relnamespace = n.oid
+    WHERE c.relkind IN ('r', 't', 'm')
+      AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+    ORDER BY age(c.relfrozenxid) DESC
+    LIMIT 10;
+  `,
+
+  deadTuples: `
+    SELECT 
+      schemaname as schema,
+      relname as table,
+      n_dead_tup as dead_tuples,
+      n_live_tup as live_tuples,
+      ROUND(n_dead_tup::numeric * 100.0 / NULLIF(n_live_tup + n_dead_tup, 0), 1) as dead_tuples_ratio
+    FROM pg_stat_user_tables
+    WHERE n_dead_tup > 10000
+    ORDER BY n_dead_tup DESC
+    LIMIT 10;
+  `,
+
+  tableBloat: `
+    WITH RECURSIVE constants AS (
+      SELECT current_setting('block_size')::numeric AS bs
+    ),
+    relation_stats AS (
+      SELECT 
+        schemaname,
+        tablename,
+        (n_live_tup + n_dead_tup) AS total_tuples,
+        seq_scan,
+        idx_scan
+      FROM pg_stat_user_tables
+    ),
+    table_bloat AS (
+      SELECT
+        schemaname as schema,
+        tablename as table,
+        CASE
+          WHEN avg_width IS NULL OR avg_width <= 0 THEN NULL
+          ELSE ceil(bs::numeric * count(*) / (bs - 24)::numeric)
+        END AS expected_pages,
+        relpages AS actual_pages,
+        CASE
+          WHEN relpages IS NULL THEN NULL
+          ELSE relpages - ceil(bs::numeric * count(*) / (bs - 24)::numeric)
+        END AS bloat_pages
+      FROM pg_class c
+      JOIN pg_namespace n ON c.relnamespace = n.oid
+      JOIN pg_stats ON tablename = relname
+      CROSS JOIN constants
+      WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+        AND c.relkind = 'r'
+      GROUP BY schemaname, tablename, bs, avg_width, relpages
+    )
+    SELECT 
+      schema,
+      table,
+      pg_size_pretty(bloat_pages::bigint * bs::bigint) AS bloat_size,
+      CASE
+        WHEN expected_pages = 0 THEN 0
+        ELSE round((bloat_pages::numeric / expected_pages::numeric)::numeric, 1)
+      END AS bloat_ratio
+    FROM table_bloat
+    CROSS JOIN constants
+    WHERE bloat_pages > 0
+    ORDER BY bloat_pages DESC
+    LIMIT 10;
+  `,
+
+  unusedIndexes: `
+    SELECT 
+      schemaname as schema,
+      tablename as table,
+      indexname as index,
+      pg_size_pretty(pg_relation_size(indexrelid::regclass)) as index_size
+    FROM pg_stat_user_indexes
+    WHERE idx_scan = 0
+      AND schemaname NOT IN ('pg_catalog', 'pg_toast')
+    ORDER BY pg_relation_size(indexrelid::regclass) DESC
+    LIMIT 10;
+  `,
+
+  missingForeignKeys: `
+    SELECT DISTINCT
+      c.conrelid::regclass as table,
+      a.attname as column,
+      c.conname as foreign_key,
+      c.confrelid::regclass as referenced_table
+    FROM pg_constraint c
+    JOIN pg_attribute a ON a.attnum = ANY(c.conkey) AND a.attrelid = c.conrelid
+    LEFT JOIN pg_index i ON c.conrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+    WHERE c.contype = 'f'
+      AND i.indrelid IS NULL
+    ORDER BY c.conrelid::regclass::text, a.attname;
+  `,
+};

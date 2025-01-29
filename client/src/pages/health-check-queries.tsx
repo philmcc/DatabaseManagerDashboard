@@ -256,39 +256,43 @@ export default function HealthCheckQueries() {
         </CardHeader>
         <CardContent>
           {/* Run Report Section */}
-          <div className="mb-8 flex items-end gap-4">
-            <div className="flex-1">
-              <FormLabel>Select Cluster</FormLabel>
-              <Select value={selectedClusterId} onValueChange={setSelectedClusterId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a cluster to run health check" />
-                </SelectTrigger>
-                <SelectContent>
-                  {clusters.map((cluster: any) => (
-                    <SelectItem key={cluster.id} value={cluster.id.toString()}>
-                      {cluster.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+          <div className="mb-8 space-y-2">
+            <div className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+              Select Cluster
             </div>
-            <Button
-              variant="default"
-              onClick={() => selectedClusterId && runHealthCheck.mutate(selectedClusterId)}
-              disabled={!selectedClusterId || runHealthCheck.isPending}
-            >
-              {runHealthCheck.isPending ? (
-                <>
-                  <Activity className="mr-2 h-4 w-4 animate-spin" />
-                  Running...
-                </>
-              ) : (
-                <>
-                  <Play className="mr-2 h-4 w-4" />
-                  Run Report
-                </>
-              )}
-            </Button>
+            <div className="flex items-end gap-4">
+              <div className="flex-1">
+                <Select value={selectedClusterId} onValueChange={setSelectedClusterId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a cluster to run health check" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {clusters.map((cluster: any) => (
+                      <SelectItem key={cluster.id} value={cluster.id.toString()}>
+                        {cluster.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button
+                variant="default"
+                onClick={() => selectedClusterId && runHealthCheck.mutate(selectedClusterId)}
+                disabled={!selectedClusterId || runHealthCheck.isPending}
+              >
+                {runHealthCheck.isPending ? (
+                  <>
+                    <Activity className="mr-2 h-4 w-4 animate-spin" />
+                    Running...
+                  </>
+                ) : (
+                  <>
+                    <Play className="mr-2 h-4 w-4" />
+                    Run Report
+                  </>
+                )}
+              </Button>
+            </div>
           </div>
 
           <Form {...form}>

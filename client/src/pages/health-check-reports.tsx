@@ -32,6 +32,20 @@ interface HealthCheckExecution {
   results: HealthCheckResult[];
 }
 
+interface HealthCheckReport {
+  id: number;
+  status: string;
+  markdown: string;
+  completedAt: string;
+  createdAt: string;
+  cluster: {
+    name: string;
+  };
+  user: {
+    username: string;
+  };
+}
+
 export default function HealthCheckReports() {
   // Fetch the latest execution
   const { data: latestExecution, isLoading: isLoadingLatest } = useQuery<HealthCheckExecution>({
@@ -43,7 +57,12 @@ export default function HealthCheckReports() {
     queryKey: ['/api/health-check-executions'],
   });
 
-  if (isLoadingLatest || isLoadingExecutions) {
+  // Fetch reports
+  const { data: reports = [], isLoading: isLoadingReports } = useQuery<HealthCheckReport[]>({
+    queryKey: ['/api/health-check-reports'],
+  });
+
+  if (isLoadingLatest || isLoadingExecutions || isLoadingReports) {
     return <div>Loading...</div>;
   }
 
@@ -57,6 +76,91 @@ export default function HealthCheckReports() {
           </CardTitle>
         </CardHeader>
         <CardContent>
+          <div className="space-y-8">
+            {reports.length > 0 ? (
+              <>
+                <h3 className="text-lg font-semibold">Latest Reports</h3>
+                <Accordion type="single" collapsible className="mb-8">
+                  {reports.map((report) => (
+                    <AccordionItem
+                      key={report.id}
+                      value={report.id.toString()}
+                      className="border mb-2"
+                    >
+                      <AccordionTrigger>
+                        <div className="flex items-center justify-between w-full pr-4">
+                          <div className="flex flex-col items-start">
+                            <span>Cluster: {report.cluster.name}</span>
+                            <span className="text-sm text-muted-foreground">
+                              {format(new Date(report.createdAt), 'PPpp')}
+                            </span>
+                          </div>
+                          <span
+                            className={`text-xs px-2 py-1 rounded ${
+                              report.status === "completed"
+                                ? "bg-green-100 text-green-800"
+                                : "bg-red-100 text-red-800"
+                            }`}
+                          >
+                            {report.status}
+                          </span>
+                        </div>
+                      </AccordionTrigger>
+                      <AccordionContent>
+                        <div className="p-4 prose prose-sm max-w-none dark:prose-invert">
+                          <div dangerouslySetInnerHTML={{ __html: report.markdown }} />
+                        </div>
+                      </AccordionContent>
+                    </AccordionItem>
+                  ))}
+                </Accordion>
+              </>
+            ) : (
+              <div className="text-muted-foreground">No health check reports available</div>
+            )}
+
+            <h3 className="text-lg font-semibold">Execution History</h3>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Started At</TableHead>
+                    <TableHead>Completed At</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Queries</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {executions.map((execution: HealthCheckExecution) => (
+                    <TableRow key={execution.id}>
+                      <TableCell>
+                        {format(new Date(execution.startedAt), 'PPpp')}
+                      </TableCell>
+                      <TableCell>
+                        {execution.completedAt
+                          ? format(new Date(execution.completedAt), 'PPpp')
+                          : '-'}
+                      </TableCell>
+                      <TableCell>
+                        <span
+                          className={`text-xs px-2 py-1 rounded ${
+                            execution.status === 'completed'
+                              ? 'bg-green-100 text-green-800'
+                              : execution.status === 'running'
+                              ? 'bg-blue-100 text-blue-800'
+                              : 'bg-red-100 text-red-800'
+                          }`}
+                        >
+                          {execution.status}
+                        </span>
+                      </TableCell>
+                      <TableCell>{execution.results?.length || 0}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
           {latestExecution && latestExecution.results && latestExecution.results.length > 0 ? (
             <>
               <h3 className="text-lg font-semibold mb-4">Latest Results</h3>
@@ -135,48 +239,6 @@ export default function HealthCheckReports() {
           ) : (
             <div className="text-muted-foreground">No health check results available</div>
           )}
-
-          <h3 className="text-lg font-semibold mb-4">Execution History</h3>
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Started At</TableHead>
-                  <TableHead>Completed At</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Queries</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {executions.map((execution: HealthCheckExecution) => (
-                  <TableRow key={execution.id}>
-                    <TableCell>
-                      {format(new Date(execution.startedAt), 'PPpp')}
-                    </TableCell>
-                    <TableCell>
-                      {execution.completedAt
-                        ? format(new Date(execution.completedAt), 'PPpp')
-                        : '-'}
-                    </TableCell>
-                    <TableCell>
-                      <span
-                        className={`text-xs px-2 py-1 rounded ${
-                          execution.status === 'completed'
-                            ? 'bg-green-100 text-green-800'
-                            : execution.status === 'running'
-                            ? 'bg-blue-100 text-blue-800'
-                            : 'bg-red-100 text-red-800'
-                        }`}
-                      >
-                        {execution.status}
-                      </span>
-                    </TableCell>
-                    <TableCell>{execution.results?.length || 0}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
         </CardContent>
       </Card>
     </BaseLayout>

@@ -1070,7 +1070,7 @@ export function registerRoutes(app: Express): Server {
             relname as table_name,
             n_live_tup as row_count,
             pg_size_pretty(pg_relation_size(schemaname || '.' || relname)) as size
-          FROM pg_stat_user_tables 
+          FROM pg_stat_usertables 
           ORDER BY n_live_tup DESC 
           LIMIT 5;
         `);
@@ -1876,7 +1876,7 @@ export function registerRoutes(app: Express): Server {
           query,
           runOnAllInstances,
           active,
-          userId: req.user?.id,
+          user_id: req.user!.id,
           displayOrder: (await db.select({ count: sql<number>`count(*)` }).from(healthCheckQueries))[0].count
         })
         .returning();

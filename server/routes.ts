@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { setupAuth } from "./auth";
 import { db } from "@db";
-import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics, clusters, instances } from "@db/schema";
+import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics, clusters, instances, healthCheckQueries, healthCheckExecutions, healthCheckQueryResults } from "@db/schema";
 import { eq, and, ne, sql, desc } from "drizzle-orm";
 import pkg from 'pg';
 const { Client } = pkg;
@@ -1071,8 +1071,8 @@ export function registerRoutes(app: Express): Server {
             n_live_tup as row_count,
             pg_size_pretty(pg_relation_size(schemaname || '.' || relname)) as size
           FROM pg_stat_user_tables 
-          WHERE schemaname = 'public'
-          ORDER BY n_live_tup DESC 
+          WHERE schemaname`
+          ORDERBY nlive_tup DESC 
           LIMIT 5
         `);
         metrics.tableStats = tableStatsResult.rows;
@@ -1238,6 +1238,757 @@ export function registerRoutes(app: Express): Server {
     } catch (error) {
       console.error("Cluster update error:", error);
       res.status(500).send("Error updating cluster");
+    }
+  });
+
+  // Health Check Endpoints
+  app.post("/api/clusters/:clusterId/health-check", requireAuth, async (req, res) => {
+    try {
+      const { clusterId } = req.params;
+      const [cluster] = await db
+        .select()
+        .from(clusters)
+        .where(eq(clusters.id, parseInt(clusterId)));
+
+      if (!cluster) {
+        return res.status(404).json({ message: "Cluster not found" });
+      }
+
+      // Create health check report
+      const [report] = await db
+        .insert(healthCheckReports)
+        .values({
+          clusterId: parseInt(clusterId),
+          userId: req.user.id,
+          status: "running",
+          reportType: "combined", // Always run all checks
+        })
+        .returning();
+
+      // Run checks asynchronously
+      process.nextTick(async () => {
+        try {
+          const results = [];
+          let markdown = "# Health Check Report\n\n";
+
+          // Get all instances in the cluster
+          const clusterInstances = await db
+            .select()
+            .from(instances)
+            .where(eq(instances.clusterId, parseInt(clusterId)));
+
+          const masterInstance = clusterInstances.find(i => i.isWriter);
+          if (!masterInstance) {
+            throw new Error("No master instance found in cluster");
+          }
+
+          // Connect to master instance
+          const masterClient = new Client({
+            host: masterInstance.hostname,
+            port: masterInstance.port,
+            user: masterInstance.username,
+            password: masterInstance.password,
+            database: masterInstance.defaultDatabaseName || 'postgres',
+            ssl: { rejectUnauthorized: false }
+          });
+
+          try {
+            await masterClient.connect();
+
+            // Cluster-level checks (on master instance)
+
+            // Database sizes
+            try {
+              const dbSizesResult = await masterClient.query(`
+                SELECT 
+                  datname AS database,
+                  pg_size_pretty(pg_database_size(datname)) AS size,
+                  pg_size_pretty(pg_tablespace_size('pg_default')) AS tablespace_size
+                FROM pg_database
+                WHERE datname NOT IN ('template0', 'template1')
+                ORDER BY pg_database_size(datname) DESC;
+              `);
+
+              results.push({
+                id: results.length + 1,
+                checkName: 'database_sizes',
+                title: 'Database Sizes',
+                status: 'success',
+                details: dbSizesResult.rows,
+                description: 'List of databases and their sizes'
+              });
+
+              markdown += "\n## Database Sizes\n\n";
+              markdown += "| Database | Size | Tablespace Size |\n|-----------|------|----------------|\n";
+              dbSizesResult.rows.forEach(row => {
+                markdown += `| ${row.database} | ${row.size} | ${row.tablespace_size} |\n`;
+              });
+            } catch (error) {
+              results.push({
+                id: results.length + 1,
+                checkName: 'database_sizes',
+                title: 'Database Sizes',
+                status: 'error',
+                details: { error: error.message },
+                description: 'Failed to check database sizes'
+              });
+            }
+
+            // Transaction ID Wraparound Check
+            try {
+              const wraparoundResult = await masterClient.query(`
+                SELECT 
+                  n.nspname as schema,
+                  c.relname as table,
+                  age(c.relfrozenxid) as xid_age,
+                  current_setting('autovacuum_freeze_max_age')::integer as max_age
+                FROM pg_class c
+                JOIN pg_namespace n on c.relnamespace = n.oid
+                WHERE c.relkind = 'r'
+                AND age(c.relfrozenxid) > current_setting('autovacuum_freeze_max_age')::integer * 0.75
+                ORDER BY age(c.relfrozenxid) DESC
+                LIMIT 20;
+              `);
+
+              results.push({
+                id: results.length + 1,
+                checkName: 'transaction_wraparound',
+                title: 'Transaction ID Wraparound Risk',
+                status: wraparoundResult.rows.length > 0 ? 'warning' : 'success',
+                details: wraparoundResult.rows,
+                description: 'Objects approaching transaction ID wraparound'
+              });
+
+              markdown += "\n## Transaction ID Wraparound Risk\n\n";
+              if (wraparoundResult.rows.length > 0) {
+                markdown += "| Schema | Table | XID Age | Max Age |\n|---------|-------|----------|----------|\n";
+                wraparoundResult.rows.forEach(row => {
+                  markdown += `| ${row.schema} | ${row.table} | ${row.xid_age} | ${row.max_age} |\n`;
+                });
+              } else {
+                markdown += "No tables at risk of transaction ID wraparound.\n";
+              }
+            } catch (error) {
+              results.push({
+                id: results.length + 1,
+                checkName: 'transaction_wraparound',
+                title: 'Transaction ID Wraparound Risk',
+                status: 'error',
+                details: { error: error.message },
+                description: 'Failed to check transaction wraparound'
+              });
+            }
+
+            // Dead Tuples Check
+            try {
+              const deadTuplesResult = await masterClient.query(`
+                SELECT 
+                  schemaname as schema,
+                  relname as table,
+                  n_dead_tup as dead_tuples,
+                  n_live_tup as live_tuples,
+                  round(n_dead_tup::numeric / NULLIF(n_live_tup, 0) * 100, 2) as dead_tuples_ratio
+                FROM pg_stat_user_tables
+                WHERE n_dead_tup > 0
+                ORDER BY n_dead_tup DESC
+                LIMIT 20;
+              `);
+
+              results.push({
+                id: results.length + 1,
+                checkName: 'dead_tuples',
+                title: 'Dead Tuples Analysis',
+                status: 'success',
+                details: deadTuplesResult.rows,
+                description: 'Tables with dead tuples that need cleanup'
+              });
+
+              markdown += "\n## Dead Tuples Analysis\n\n";
+              markdown += "| Schema | Table | Dead Tuples | Live Tuples | Dead/Live Ratio (%) |\n|---------|-------|--------------|-------------|-------------------|\n";
+              deadTuplesResult.rows.forEach(row => {
+                markdown += `| ${row.schema} | ${row.table} | ${row.dead_tuples} | ${row.live_tuples} | ${row.dead_tuples_ratio} |\n`;
+              });
+            } catch (error) {
+              results.push({
+                id: results.length + 1,
+                checkName: 'dead_tuples',
+                title: 'Dead Tuples Analysis',
+                status: 'error',
+                details: { error: error.message },
+                description: 'Failed to check dead tuples'
+              });
+            }
+
+            // Heap Bloat Check
+            try {
+              const heapBloatResult = await masterClient.query(`
+                WITH constants AS (
+                  SELECT current_setting('block_size')::numeric AS bs, 23 AS hdr, 8 AS ma
+                ),
+                no_stats AS (
+                  SELECT table_schema, table_name, 
+                         n_live_tup::numeric as est_rows,
+                         pg_table_size(relid)::numeric as table_size
+                  FROM information_schema.tables
+                  JOIN pg_stat_user_tables as psut
+                     ON table_schema = schemaname
+                     AND table_name = relname
+                  LEFT OUTER JOIN pg_stats
+                  ON table_schema = schemaname
+                     AND table_name = relname
+                  WHERE table_type = 'BASE TABLE'
+                ),
+                null_headers AS (
+                  SELECT
+                    hdr+1+(sum(case when null_frac <> 0 THEN 1 else 0 END)/8) as nullhdr,
+                    SUM((1-null_frac)*avg_width) as datawidth,
+                    MAX(null_frac) as maxfrac,
+                    schemaname,
+                    tablename,
+                    hdr
+                  FROM pg_stats CROSS JOIN constants
+                  GROUP BY schemaname, tablename, hdr
+                ),
+                table_bloat AS (
+                  SELECT
+                    schemaname as schema,
+                    tablename as table,
+                    ROUND(CASE WHEN avgrowwidth.avgrowwidth = 0 OR tablename IS NULL
+                      THEN 0.0
+                      ELSE bs*notnull.count/(avgrowwidth.avgrowwidth + hdr)
+                      END) AS expected_bytes,
+                    CASE WHEN tablename IS NULL
+                      THEN 0
+                      ELSE pg_relation_size(schemaname || '.' || tablename)
+                      END AS actual_bytes,
+                    pg_size_pretty(
+                      CASE WHEN tablename IS NULL
+                        THEN 0
+                        ELSE pg_relation_size(schemaname || '.' || tablename)
+                        END - (bs*notnull.count/(avgrowwidth.avgrowwidth + hdr))
+                    ) AS bloat_size
+                  FROM
+                    (SELECT
+                      schemaname,
+                      tablename,
+                      hdr,
+                      SUM((1-s.null_frac)*s.avg_width)::numeric AS avgrowwidth
+                    FROM pg_stats s
+                    CROSS JOIN constants
+                    GROUP BY 1,2,3
+                    ) AS avgrowwidth
+                    CROSS JOIN constants
+                    CROSS JOIN
+                    (SELECT
+                      schemaname,
+                      tablename,
+                      SUM(n_live_tup) AS count
+                    FROM pg_stat_user_tables
+                    GROUP BY 1,2
+                    ) AS notnull
+                  WHERE notnull.schemaname = avgrowwidth.schemaname
+                    AND notnull.tablename = avgrowwidth.tablename
+                )
+                SELECT *,
+                  ROUND(100*(actual_bytes-expected_bytes)::numeric/nullif(actual_bytes, 0), 2) as bloat_ratio
+                FROM table_bloat
+                WHERE actual_bytes > 0
+                  AND (actual_bytes-expected_bytes)::numeric/nullif(actual_bytes, 0) > 0.2
+                ORDER BY bloat_ratio DESC
+                LIMIT 20;
+              `);
+
+              results.push({
+                id: results.length + 1,
+                checkName: 'heap_bloat',
+                title: 'Heap Bloat Analysis',
+                status: heapBloatResult.rows.length > 0 ? 'warning' : 'success',
+                details: heapBloatResult.rows,
+                description: 'Tables with significant heap bloat'
+              });
+
+              markdown += "\n## Heap Bloat Analysis\n\n";
+              markdown += "| Schema | Table | Expected Size | Actual Size | Bloat Size | Bloat Ratio (%) |\n|---------|-------|---------------|-------------|------------|----------------|\n";
+              heapBloatResult.rows.forEach(row => {
+                markdown += `| ${row.schema} | ${row.table} | ${row.expected_bytes} | ${row.actual_bytes} | ${row.bloat_size} | ${row.bloat_ratio} |\n`;
+              });
+            } catch (error) {
+              results.push({
+                id: results.length + 1,
+                checkName: 'heap_bloat',
+                title: 'Heap Bloat Analysis',
+                status: 'error',
+                details: { error: error.message },
+                description: 'Failed to check heap bloat'
+              });
+            }
+
+            // Invalid and Duplicate Indexes Check
+            try {
+              const invalidIndexesResult = await masterClient.query(`
+                SELECT 
+                  schemaname as schema,
+                  tablename as table,
+                  indexname as index,
+                  pg_size_pretty(pg_relation_size(i.indexrelid)) as index_size
+                FROM pg_index i
+                JOIN pg_class c ON i.indexrelid = c.oid
+                JOIN pg_stat_user_indexes ui ON i.indexrelid = ui.indexrelid
+                WHERE NOT i.indisvalid
+                ORDER BY pg_relation_size(i.indexrelid) DESC;
+              `);
+
+              results.push({
+                id: results.length + 1,
+                checkName: 'invalid_indexes',
+                title: 'Invalid Indexes',
+                status: invalidIndexesResult.rows.length > 0 ? 'warning' : 'success',
+                details: invalidIndexesResult.rows,
+                description: 'Invalid indexes that should be rebuilt'
+              });
+
+              markdown += "\n## Invalid Indexes\n\n";
+              if (invalidIndexesResult.rows.length > 0) {
+                markdown += "| Schema | Table | Index | Size |\n|---------|-------|-------|------|\n";
+                invalidIndexesResult.rows.forEach(row => {
+                  markdown += `| ${row.schema} | ${row.table} | ${row.index} | ${row.index_size} |\n`;
+                });
+              } else {
+                markdown += "No invalid indexes found.\n";
+              }
+            } catch (error) {
+              results.push({
+                id: results.length + 1,
+                checkName: 'invalid_indexes',
+                title: 'Invalid Indexes',
+                status: 'error',
+                details: { error: error.message },
+                description: 'Failed to check invalid indexes'
+              });
+            }
+
+            // Non-indexed Foreign Keys Check
+            try {
+              const nonIndexedFKsResult = await masterClient.query(`
+                SELECT DISTINCT
+                  conrelid::regclass AS table,
+                  a.attname AS column,
+                  conname AS foreign_key,
+                  confrelid::regclass AS referenced_table
+                FROM pg_constraint c
+                JOIN pg_attribute a ON a.attnum = ANY(c.conkey) AND a.attrelid = c.conrelid
+                LEFT JOIN pg_index i ON c.conrelid = i.indrelid 
+                  AND a.attnum = ANY(i.indkey)
+                WHERE c.contype = 'f'
+                  AND i.indrelid IS NULL
+                ORDER BY conrelid::regclass::text, a.attname;
+              `);
+
+              results.push({
+                id: results.length + 1,
+                checkName: 'non_indexed_fks',
+                title: 'Non-indexed Foreign Keys',
+                status: nonIndexedFKsResult.rows.length > 0 ? 'warning' : 'success',
+                details: nonIndexedFKsResult.rows,
+                description: 'Foreign keys without corresponding indexes'
+              });
+
+              markdown += "\n## Non-indexed Foreign Keys\n\n";
+              if (nonIndexedFKsResult.rows.length > 0) {
+                markdown += "| Table | Column | Foreign Key | Referenced Table |\n|-------|--------|-------------|------------------|\n";
+                nonIndexedFKsResult.rows.forEach(row => {
+                  markdown += `| ${row.table} | ${row.column} | ${row.foreign_key} | ${row.referenced_table} |\n`;
+                });
+              } else {
+                markdown += "All foreign keys are properly indexed.\n";
+              }
+            } catch (error) {
+              results.push({
+                id: results.length + 1,
+                checkName: 'non_indexed_fks',
+                title: 'Non-indexed Foreign Keys',
+                status: 'error',
+                details: { error: error.message },
+                description: 'Failed to check non-indexed foreign keys'
+              });
+            }
+
+            // Instance-level checks for each instance
+            for (const instance of clusterInstances) {
+              const instanceClient = new Client({
+                host: instance.hostname,
+                port: instance.port,
+                user: instance.username,
+                password: instance.password,
+                database: instance.defaultDatabaseName || 'postgres',
+                ssl: { rejectUnauthorized: false }
+              });
+
+              try {
+                await instanceClient.connect();
+
+                // Unused and Rarely Used Indexes
+                try {
+                  const indexUsageResult = await instanceClient.query(`
+                    SELECT
+                      schemaname as schema,
+                      tablename as table,
+                      indexname as index,
+                      idx_scan as scans,
+                      idx_tup_read as tuples_read,
+                      idx_tup_fetch as tuples_fetched,
+                      pg_size_pretty(pg_relation_size(indexrelid::regclass)) as index_size
+                    FROM pg_stat_user_indexes
+                    WHERE idx_scan < 50
+                    AND schemaname NOT IN ('pg_catalog', 'pg_toast')
+                    ORDER BY idx_scan ASC, pg_relation_size(indexrelid::regclass) DESC
+                    LIMIT 50;
+                  `);
+
+                  results.push({
+                    id: results.length + 1,
+                    checkName: 'index_usage',
+                    title: `Index Usage Analysis - ${instance.hostname}:${instance.port}`,
+                    status: 'success',
+                    details: indexUsageResult.rows,
+                    description: 'Rarely used or unused indexes',
+                    instance: {
+                      hostname: instance.hostname,
+                      port: instance.port
+                    }
+                  });
+
+                  markdown += `\n## Index Usage Analysis - ${instance.hostname}:${instance.port}\n\n`;
+                  markdown += "| Schema | Table | Index | Scans | Tuples Read | Tuples Fetched | Size |\n|---------|-------|-------|--------|-------------|----------------|------|\n";
+                  indexUsageResult.rows.forEach(row => {
+                    markdown += `| ${row.schema} | ${row.table} | ${row.index} | ${row.scans} | ${row.tuples_read} | ${row.tuples_fetched} | ${row.index_size} |\n`;
+                  });
+                } catch (error) {
+                  results.push({
+                    id: results.length + 1,
+                    checkName: 'index_usage',
+                    title: `Index Usage Analysis - ${instance.hostname}:${instance.port}`,
+                    status: 'error',
+                    details: { error: error.message },
+                    description: 'Failed to check index usage',
+                    instance: {
+                      hostname: instance.hostname,
+                      port: instance.port
+                    }
+                  });
+                }
+
+                // Top Queries by Total Time
+                try {
+                  const topQueriesResult = await instanceClient.query(`
+                    SELECT 
+                      substring(query, 1, 200) as query,
+                      round(total_exec_time::numeric, 2) as total_time,
+                      calls,
+                      round(mean_exec_time::numeric, 2) as mean_time,
+                      round((100 * total_exec_time / sum(total_exec_time) over ())::numeric, 2) as percentage_cpu
+                    FROM pg_stat_statements
+                    ORDER BY total_exec_time DESC
+                    LIMIT 50;
+                  `);
+
+                  results.push({
+                    id: results.length + 1,
+                    checkName: 'top_queries',
+                    title: `Top Queries by Total Time - ${instance.hostname}:${instance.port}`,
+                    status: 'success',
+                    details: topQueriesResult.rows,
+                    description: 'Queries consuming the most total execution time',
+                    instance: {
+                      hostname: instance.hostname,
+                      port: instance.port
+                    }
+                  });
+
+                  markdown += `\n## Top Queries by Total Time - ${instance.hostname}:${instance.port}\n\n`;
+                  markdown += "| Query | Total Time (ms) | Calls | Mean Time (ms) | CPU % |\n|-------|----------------|--------|---------------|--------|\n";
+                  topQueriesResult.rows.forEach(row => {
+                    markdown += `| \`${row.query.replace(/\|/g, '\\|')}\` | ${row.total_time} | ${row.calls} | ${row.mean_time} | ${row.percentage_cpu} |\n`;
+                  });
+                } catch (error) {
+                  results.push({
+                    id: results.length + 1,
+                    checkName: 'top_queries',
+                    title: `Top Queries by Total Time - ${instance.hostname}:${instance.port}`,
+                    status: 'error',
+                    details: { error: error.message },
+                    description: 'Failed to check top queries',
+                    instance: {
+                      hostname: instance.hostname,
+                      port: instance.port
+                    }
+                  });
+                }
+
+                await instanceClient.end();
+              } catch (error) {
+                console.error(`Error checking instance ${instance.hostname}:${instance.port}:`, error);
+                results.push({
+                  id: results.length + 1,
+                  checkName: 'instance_connection',
+                  title: `Instance Connection - ${instance.hostname}:${instance.port}`,
+                  status: 'error',
+                  details: { error: error.message },
+                  description: 'Failed to connect to instance',
+                  instance: {
+                    hostname: instance.hostname,
+                    port: instance.port
+                  }
+                });
+              }
+            }
+
+            await masterClient.end();
+
+            // Update report with results
+            await db
+              .update(healthCheckReports)
+              .set({
+                status: 'completed',
+                completedAt: new Date(),
+                markdown: markdown
+              })
+              .where(eq(healthCheckReports.id, report.id));
+
+            // Insert individual check results
+            for (const result of results) {
+              await db
+                .insert(healthCheckResults)
+                .values({
+                  reportId: report.id,
+                  checkName: result.checkName,
+                  status: result.status,
+                  details: result.details
+                });
+            }
+
+          } catch (error) {
+            console.error('Error in master instance checks:', error);
+            await db
+              .update(healthCheckReports)
+              .set({
+                status: 'failed',
+                completedAt: new Date(),
+                markdown: `# Health Check Failed\n\nError: ${error.message}`
+              })
+              .where(eq(healthCheckReports.id, report.id));
+          }
+        } catch (error) {
+          console.error('Error in health check process:', error);
+          await db
+            .update(healthCheckReports)
+            .set({
+              status: 'failed',
+              completedAt: new Date(),
+              markdown: `# Health Check Failed\n\nError: ${error.message}`
+            })
+            .where(eq(healthCheckReports.id, report.id));
+        }
+      });
+
+      res.json(report);
+    } catch (error) {
+      console.error('Health check error:', error);
+      res.status(500).json({
+        message: 'Error performing health check',
+        error: error.message
+      });
+    }
+  });
+
+  // Get health check reports for a cluster
+  app.get("/api/clusters/:clusterId/health-checks", requireAuth, async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { clusterId } = req.params;
+
+      const reports = await db.query.healthCheckReports.findMany({
+        where: eq(healthCheckReports.clusterId, parseInt(clusterId)),
+        with: {
+          results: true,
+        },
+        orderBy: (table, { desc }) => [desc(table.createdAt)],
+      });
+
+      res.json(reports);
+    } catch (error) {
+      console.error("Health check reports fetch error:", error);
+      res.status(500).send("Error fetching health check reports");
+    }
+  });
+
+  // Get all health check reports
+  app.get("/api/health-checks", requireAuth, async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      // Get active queries in their specified order
+      const activeQueries = await db.query.healthCheckQueries.findMany({
+        where: eq(healthCheckQueries.isActive, true),
+        orderBy: (queries, { asc }) => [asc(queries.orderIndex)],
+      });
+
+      // Get the most recent executions
+      const recentExecutions = await db.query.healthCheckExecutions.findMany({
+        limit: 5,
+        orderBy: (executions, { desc }) => [desc(executions.startedAt)],
+        with: {
+          cluster: true,
+          results: {
+            with: {
+              query: true,
+              instance: true,
+            },
+          },
+        },
+      });
+
+      res.json({
+        queries: activeQueries,
+        recentExecutions: recentExecutions,
+      });
+    } catch (error) {
+      console.error("Health checks fetch error:", error);
+      res.status(500).send("Error fetching health checks");
+    }
+  });
+
+  // Get a specific health check report
+  app.get("/api/health-checks/:id", requireAuth, async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { id } = req.params;
+
+      const report = await db.query.healthCheckReports.findFirst({
+        where: eq(healthCheckReports.id, parseInt(id)),
+        with: {
+          cluster: true,
+          results: {
+            with: {
+              instance: true,
+            },
+          },
+        },
+      });
+
+      if (!report) {
+        return res.status(404).send("Report not found");
+      }
+
+      res.json(report);
+    } catch (error) {
+      console.error("Health check report fetch error:", error);
+      res.status(500).send("Error fetching health check report");
+    }
+  });
+
+  // Health Check System Endpoints
+  app.get("/api/health-check/queries", requireAuth, async (req, res) => {
+    try {
+      const queries = await db.query.healthCheckQueries.findMany({
+        orderBy: (queries, { asc }) => [asc(queries.orderIndex)],
+      });
+      res.json(queries);
+    } catch (error) {
+      console.error("Health check queries fetch error:", error);
+      res.status(500).send("Error fetching health check queries");
+    }
+  });
+
+  app.post("/api/health-check/queries", requireWriterOrAdmin, async (req, res) => {
+    try {
+      const { title, query, scope, isActive } = req.body;
+
+      // Get max order index
+      const maxOrderResult = await db
+        .select({
+          maxOrder: sql<number>`COALESCE(MAX(${healthCheckQueries.orderIndex}), 0)`,
+        })
+        .from(healthCheckQueries);
+
+      const newOrderIndex = (maxOrderResult[0]?.maxOrder || 0) + 1;
+
+      const [newQuery] = await db
+        .insert(healthCheckQueries)
+        .values({
+          title,
+          query,
+          scope,
+          isActive: isActive ?? true,
+          orderIndex: newOrderIndex,
+          userId: req.user.id,
+        })
+        .returning();
+
+      res.status(201).json(newQuery);
+    } catch (error) {
+      console.error("Health check query creation error:", error);
+      res.status(500).send("Error creating health check query");
+    }
+  });
+
+  app.patch("/api/health-check/queries/:id", requireWriterOrAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { title, query, scope, isActive, orderIndex } = req.body;
+
+      const [updatedQuery] = await db
+        .update(healthCheckQueries)
+        .set({
+          title,
+          query,
+          scope,
+          isActive,
+          orderIndex,
+          updatedAt: new Date(),
+        })
+        .where(eq(healthCheckQueries.id, parseInt(id)))
+        .returning();
+
+      res.json(updatedQuery);
+    } catch (error) {
+      console.error("Health check query update error:", error);
+      res.status(500).send("Error updating health check query");
+    }
+  });
+
+  app.post("/api/health-check/queries/reorder", requireWriterOrAdmin, async (req, res) => {
+    try {
+      const { orderUpdates } = req.body;
+
+      // Validate input
+      if (!Array.isArray(orderUpdates)) {
+        return res.status(400).json({ message: "Invalid order updates format" });
+      }
+
+      // Update each query's order
+      const updates = await Promise.all(
+        orderUpdates.map(({ id, orderIndex }) =>
+          db
+            .update(healthCheckQueries)
+            .set({ orderIndex })
+            .where(eq(healthCheckQueries.id, id))
+            .returning()
+        )
+      );
+
+      res.json(updates.flat());
+    } catch (error) {
+      console.error("Queryreorder error:", error);
+      res.status(500).send("Error reordering queries");
     }
   });
 

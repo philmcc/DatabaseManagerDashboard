@@ -18,6 +18,8 @@ import ClusterDetails from "@/pages/cluster-details";
 import InstanceForm from "@/pages/instance-form";
 import InstanceDetails from "@/pages/instance-details";
 import UserManagement from "@/pages/user-management";
+import HealthCheckQueries from "@/pages/health-check-queries";
+import HealthCheckReports from "@/pages/health-check-reports";
 import { useUser } from "@/hooks/use-user";
 import { Loader2 } from "lucide-react";
 
@@ -88,6 +90,12 @@ function Router() {
       </Route>
       <Route path="/users">
         {user?.role === 'ADMIN' ? <UserManagement /> : <Home />}
+      </Route>
+      <Route path="/health-check/queries">
+        {user?.role !== 'READER' ? <HealthCheckQueries /> : <Home />}
+      </Route>
+      <Route path="/health-check/reports">
+        {user ? <HealthCheckReports /> : <Home />}
       </Route>
       <Route component={NotFound} />
     </Switch>

@@ -203,6 +203,86 @@ export const databaseMetricsRelations = relations(databaseMetrics, ({ one }) => 
   }),
 }));
 
+// Health check related tables
+export const healthCheckQueries = pgTable("health_check_queries", {
+  id: serial("id").primaryKey(),
+  title: text("title").notNull(),
+  query: text("query").notNull(),
+  runOnAllInstances: boolean("run_on_all_instances").default(false).notNull(),
+  active: boolean("active").default(true).notNull(),
+  displayOrder: integer("display_order").notNull(),
+  userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  createdAt: timestamp("createdAt").defaultNow(),
+  updatedAt: timestamp("updatedAt").defaultNow(),
+});
+
+export const healthCheckExecutions = pgTable("health_check_executions", {
+  id: serial("id").primaryKey(),
+  userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  startedAt: timestamp("started_at").defaultNow(),
+  completedAt: timestamp("completed_at"),
+  status: text("status").notNull(), // 'running', 'completed', 'failed'
+});
+
+export const healthCheckQueryResults = pgTable("health_check_query_results", {
+  id: serial("id").primaryKey(),
+  executionId: integer("execution_id").notNull().references(() => healthCheckExecutions.id, { onDelete: 'cascade' }),
+  queryId: integer("query_id").notNull().references(() => healthCheckQueries.id, { onDelete: 'cascade' }),
+  instanceId: integer("instance_id").notNull().references(() => instances.id, { onDelete: 'cascade' }),
+  results: jsonb("results").notNull(),
+  error: text("error"),
+  executedAt: timestamp("executed_at").defaultNow(),
+});
+
+// Add relations for health check tables
+export const healthCheckQueriesRelations = relations(healthCheckQueries, ({ one, many }) => ({
+  user: one(users, {
+    fields: [healthCheckQueries.userId],
+    references: [users.id],
+  }),
+  results: many(healthCheckQueryResults),
+}));
+
+export const healthCheckExecutionsRelations = relations(healthCheckExecutions, ({ one, many }) => ({
+  user: one(users, {
+    fields: [healthCheckExecutions.userId],
+    references: [users.id],
+  }),
+  results: many(healthCheckQueryResults),
+}));
+
+export const healthCheckQueryResultsRelations = relations(healthCheckQueryResults, ({ one }) => ({
+  execution: one(healthCheckExecutions, {
+    fields: [healthCheckQueryResults.executionId],
+    references: [healthCheckExecutions.id],
+  }),
+  query: one(healthCheckQueries, {
+    fields: [healthCheckQueryResults.queryId],
+    references: [healthCheckQueries.id],
+  }),
+  instance: one(instances, {
+    fields: [healthCheckQueryResults.instanceId],
+    references: [instances.id],
+  }),
+}));
+
+// Add schemas for the new tables
+export const insertHealthCheckQuerySchema = createInsertSchema(healthCheckQueries);
+export const selectHealthCheckQuerySchema = createSelectSchema(healthCheckQueries);
+export const insertHealthCheckExecutionSchema = createInsertSchema(healthCheckExecutions);
+export const selectHealthCheckExecutionSchema = createSelectSchema(healthCheckExecutions);
+export const insertHealthCheckQueryResultSchema = createInsertSchema(healthCheckQueryResults);
+export const selectHealthCheckQueryResultSchema = createSelectSchema(healthCheckQueryResults);
+
+// Add types for the new tables
+export type InsertHealthCheckQuery = typeof healthCheckQueries.$inferInsert;
+export type SelectHealthCheckQuery = typeof healthCheckQueries.$inferSelect;
+export type InsertHealthCheckExecution = typeof healthCheckExecutions.$inferInsert;
+export type SelectHealthCheckExecution = typeof healthCheckExecutions.$inferSelect;
+export type InsertHealthCheckQueryResult = typeof healthCheckQueryResults.$inferInsert;
+export type SelectHealthCheckQueryResult = typeof healthCheckQueryResults.$inferSelect;
+
+
 // Schema validation
 export const insertTagSchema = createInsertSchema(tags);
 export const selectTagSchema = createSelectSchema(tags);

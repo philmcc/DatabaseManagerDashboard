@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Activity } from "lucide-react";
 import BaseLayout from "@/components/layout/base-layout";
 import { format } from "date-fns";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import ReactMarkdown from 'react-markdown';
 import {
   Accordion,
   AccordionContent,
@@ -15,7 +15,7 @@ interface HealthCheckReport {
   id: number;
   status: string;
   markdown: string;
-  completedAt: string;
+  completedAt: string | null;
   createdAt: string;
   cluster: {
     name: string;
@@ -26,13 +26,18 @@ interface HealthCheckReport {
 }
 
 export default function HealthCheckReports() {
-  // Fetch reports
   const { data: reports = [], isLoading: isLoadingReports } = useQuery<HealthCheckReport[]>({
     queryKey: ['/api/health-check-reports'],
   });
 
   if (isLoadingReports) {
-    return <div>Loading...</div>;
+    return (
+      <BaseLayout>
+        <div className="flex items-center justify-center h-32">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+        </div>
+      </BaseLayout>
+    );
   }
 
   return (
@@ -59,7 +64,7 @@ export default function HealthCheckReports() {
                       <AccordionTrigger>
                         <div className="flex items-center justify-between w-full pr-4">
                           <div className="flex flex-col items-start">
-                            <span>Cluster: {report.cluster.name}</span>
+                            <span>Cluster: {report.cluster?.name || 'Unknown Cluster'}</span>
                             <span className="text-sm text-muted-foreground">
                               {format(new Date(report.createdAt), 'PPpp')}
                             </span>
@@ -67,8 +72,8 @@ export default function HealthCheckReports() {
                           <span
                             className={`text-xs px-2 py-1 rounded ${
                               report.status === "completed"
-                                ? "bg-green-100 text-green-800"
-                                : "bg-red-100 text-red-800"
+                                ? "bg-green-100 text-green-800 dark:bg-green-800 dark:text-green-100"
+                                : "bg-red-100 text-red-800 dark:bg-red-800 dark:text-red-100"
                             }`}
                           >
                             {report.status}
@@ -77,7 +82,7 @@ export default function HealthCheckReports() {
                       </AccordionTrigger>
                       <AccordionContent>
                         <div className="p-4 prose prose-sm max-w-none dark:prose-invert">
-                          <div dangerouslySetInnerHTML={{ __html: report.markdown }} />
+                          <ReactMarkdown>{report.markdown}</ReactMarkdown>
                         </div>
                       </AccordionContent>
                     </AccordionItem>

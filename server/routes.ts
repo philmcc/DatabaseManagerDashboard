@@ -1684,169 +1684,29 @@ export function registerRoutes(app: Express): Server {
   });
 
   // Get all health check reports
-  app.get("/api/health-checks", requireAuth, async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).send("Not authenticated");
-    }
-
+  app.get("/api/health-check-reports", requireAuth, async (req, res) => {
     try {
-      // Get active queries in their specified order
-      const activeQueries = await db.query.healthCheckQueries.findMany({
-        where: eq(healthCheckQueries.isActive, true),
-        orderBy: (queries, { asc }) => [asc(queries.orderIndex)],
-      });
-
-      // Get the most recent executions
-      const recentExecutions = await db.query.healthCheckExecutions.findMany({
-        limit: 5,
-        orderBy: (executions, { desc }) => [desc(executions.startedAt)],
+      const reports = await db.query.healthCheckReports.findMany({
+        orderBy: [desc(healthCheckReports.createdAt)],
         with: {
-          cluster: true,
-          results: {
-            with: {
-              query: true,
-              instance: true,
+          cluster: {
+            columns: {
+              name: true,
+            },
+          },
+          user: {
+            columns: {
+              username: true,
             },
           },
         },
       });
 
-      res.json({
-        queries: activeQueries,
-        recentExecutions: recentExecutions,
-      });
+      console.log('Fetched reports:', reports);
+      res.json(reports);
     } catch (error) {
-      console.error("Health checks fetch error:", error);
-      res.status(500).send("Error fetching health checks");
-    }
-  });
-
-  // Get a specific health check report
-  app.get("/api/health-checks/:id", requireAuth, async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).send("Not authenticated");
-    }
-
-    try {
-      const { id } = req.params;
-
-      const report = await db.query.healthCheckReports.findFirst({
-        where: eq(healthCheckReports.id, parseInt(id)),
-        with: {
-          cluster: true,
-          results: {
-            with: {
-              instance: true,
-            },
-          },
-        },
-      });
-
-      if (!report) {
-        return res.status(404).send("Report not found");
-      }
-
-      res.json(report);
-    } catch (error) {
-      console.error("Health check report fetch error:", error);
-      res.status(500).send("Error fetching health check report");
-    }
-  });
-
-  // Health Check System Endpoints
-  app.get("/api/health-check/queries", requireAuth, async (req, res) => {
-    try {
-      const queries = await db.query.healthCheckQueries.findMany({
-        orderBy: (queries, { asc }) => [asc(queries.orderIndex)],
-      });
-      res.json(queries);
-    } catch (error) {
-      console.error("Health check queries fetch error:", error);
-      res.status(500).send("Error fetching health check queries");
-    }
-  });
-
-  app.post("/api/health-check/queries", requireWriterOrAdmin, async (req, res) => {
-    try {
-      const { title, query, scope, isActive } = req.body;
-
-      // Get max order index
-      const maxOrderResult = await db
-        .select({
-          maxOrder: sql<number>`COALESCE(MAX(${healthCheckQueries.orderIndex}), 0)`,
-        })
-        .from(healthCheckQueries);
-
-      const newOrderIndex = (maxOrderResult[0]?.maxOrder || 0) + 1;
-
-      const [newQuery] = await db
-        .insert(healthCheckQueries)
-        .values({
-          title,
-          query,
-          scope,
-          isActive: isActive ?? true,
-          orderIndex: newOrderIndex,
-          userId: req.user.id,
-        })
-        .returning();
-
-      res.json(newQuery);
-    } catch (error) {
-      console.error("Health check query creation error:", error);
-      res.status(500).send("Error creating health check query");
-    }
-  });
-
-  app.patch("/api/health-check/queries/:id", requireWriterOrAdmin, async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { title, query, scope, isActive, orderIndex } = req.body;
-
-      const [updatedQuery] = await db
-        .update(healthCheckQueries)
-        .set({
-          title,
-          query,
-          scope,
-          isActive,
-          orderIndex,
-          updatedAt: new Date(),
-        })
-        .where(eq(healthCheckQueries.id, parseInt(id)))
-        .returning();
-
-      res.json(updatedQuery);
-    } catch (error) {
-      console.error("Health check query update error:", error);
-      res.status(500).send("Error updating health check query");
-    }
-  });
-
-  app.post("/api/health-check/queries/reorder", requireWriterOrAdmin, async (req, res) => {
-    try {
-      const { orderUpdates } = req.body;
-
-      // Validate input
-      if (!Array.isArray(orderUpdates)) {
-        return res.status(400).json({ message: "Invalid order updates format" });
-      }
-
-      // Update each query's order
-      const updates = await Promise.all(
-        orderUpdates.map(({ id, orderIndex }) =>
-          db
-            .update(healthCheckQueries)
-            .set({ orderIndex })
-            .where(eq(healthCheckQueries.id, id))
-            .returning()
-        )
-      );
-
-      res.json(updates.flat());
-    } catch (error) {
-      console.error("Queryreorder error:", error);
-      res.status(500).send("Error reordering queries");
+      console.error("Error fetching health check reports:", error);
+      res.status(500).json({ message: "Error fetching reports" });
     }
   });
 
@@ -2160,7 +2020,7 @@ const databaseMetricsQueries = {
   databaseSizes: `
     SELECT 
       datname AS database,
-      pg_size_pretty(pg_database_size(datname)) AS size,
+      pg_<previous_generation>size_pretty(pg_database_size(datname)) AS size,
       pg_size_pretty(pg_tablespace_size('pg_default')) AS tablespace_size
     FROM pg_database
     WHERE datname NOT IN ('template0', 'template1', 'postgres')

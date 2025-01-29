@@ -34,14 +34,30 @@ const querySchema = z.object({
   active: z.boolean(),
 });
 
+type HealthCheckQuery = {
+  id: number;
+  title: string;
+  query: string;
+  runOnAllInstances: boolean;
+  active: boolean;
+  displayOrder: number;
+};
+
 export default function HealthCheckQueries() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [editingId, setEditingId] = useState<number | null>(null);
 
   // Fetch queries
-  const { data: queries = [], isLoading } = useQuery({
+  const { data: queries = [], isLoading: isLoadingQueries } = useQuery<HealthCheckQuery[]>({
     queryKey: ['/api/health-check-queries'],
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: `Failed to load queries: ${error.message}`,
+        variant: "destructive",
+      });
+    },
   });
 
   // Add new query mutation
@@ -52,14 +68,31 @@ export default function HealthCheckQueries() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
       });
-      if (!response.ok) throw new Error('Failed to add query');
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(error || 'Failed to add query');
+      }
       return response.json();
     },
-    onSuccess: () => {
+    onMutate: () => {
+      toast({
+        title: "Saving...",
+        description: "Adding new health check query",
+      });
+    },
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['/api/health-check-queries'] });
       toast({
         title: "Success",
-        description: "Query added successfully",
+        description: `Query "${data.title}" added successfully`,
+      });
+      form.reset();
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
       });
     },
   });
@@ -75,13 +108,26 @@ export default function HealthCheckQueries() {
       if (!response.ok) throw new Error('Failed to update query');
       return response.json();
     },
-    onSuccess: () => {
+    onMutate: () => {
+      toast({
+        title: "Saving...",
+        description: "Updating health check query",
+      });
+    },
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['/api/health-check-queries'] });
       toast({
         title: "Success",
-        description: "Query updated successfully",
+        description: `Query "${data.title}" updated successfully`,
       });
       setEditingId(null);
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
     },
   });
 
@@ -98,6 +144,17 @@ export default function HealthCheckQueries() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/health-check-queries'] });
+      toast({
+        title: "Success",
+        description: "Query order updated successfully",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
     },
   });
 
@@ -117,7 +174,6 @@ export default function HealthCheckQueries() {
     } else {
       addMutation.mutate(values);
     }
-    form.reset();
   };
 
   const handleDragEnd = (result: any) => {
@@ -135,8 +191,14 @@ export default function HealthCheckQueries() {
     reorderMutation.mutate(updatedQueries);
   };
 
-  if (isLoading) {
-    return <div>Loading...</div>;
+  if (isLoadingQueries) {
+    return (
+      <BaseLayout>
+        <div className="flex items-center justify-center p-8">
+          <Activity className="h-8 w-8 animate-spin text-primary" />
+        </div>
+      </BaseLayout>
+    );
   }
 
   return (
@@ -215,8 +277,18 @@ export default function HealthCheckQueries() {
                   )}
                 />
               </div>
-              <Button type="submit">
-                {editingId ? "Update Query" : "Add Query"}
+              <Button 
+                type="submit" 
+                disabled={addMutation.isPending || updateMutation.isPending}
+              >
+                {addMutation.isPending || updateMutation.isPending ? (
+                  <>
+                    <Activity className="mr-2 h-4 w-4 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  editingId ? "Update Query" : "Add Query"
+                )}
               </Button>
             </form>
           </Form>

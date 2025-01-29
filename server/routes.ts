@@ -2,8 +2,8 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { setupAuth } from "./auth";
 import { db } from "@db";
-import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics, clusters, instances, healthCheckQueries, healthCheckExecutions, healthCheckQueryResults } from "@db/schema";
-import { eq, and, ne, sql, desc } from "drizzle-orm";
+import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics, clusters, instances, healthCheckQueries, healthCheckExecutions, healthCheckQueryResults, healthCheckReports } from "@db/schema";
+import { eq, and, ne, sql, desc, asc } from "drizzle-orm";
 import pkg from 'pg';
 const { Client } = pkg;
 
@@ -1072,7 +1072,7 @@ export function registerRoutes(app: Express): Server {
             pg_size_pretty(pg_relation_size(schemaname || '.' || relname)) as size
           FROM pg_stat_user_tables 
           ORDER BY n_live_tup DESC 
-          LIMIT 5
+          LIMIT 5;
         `);
         metrics.tableStats = tableStatsResult.rows;
         console.log('Table statistics:', metrics.tableStats);
@@ -1794,7 +1794,7 @@ export function registerRoutes(app: Express): Server {
         })
         .returning();
 
-      res.status(201).json(newQuery);
+      res.json(newQuery);
     } catch (error) {
       console.error("Health check query creation error:", error);
       res.status(500).send("Error creating health check query");
@@ -1850,6 +1850,63 @@ export function registerRoutes(app: Express): Server {
     } catch (error) {
       console.error("Queryreorder error:", error);
       res.status(500).send("Error reordering queries");
+    }
+  });
+
+  // Add health check query creation endpoint from edited snippet
+  app.post("/api/health-check-queries", requireWriterOrAdmin, async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { title, query, runOnAllInstances, active } = req.body;
+
+      // Validate required fields
+      if (!title || !query) {
+        return res.status(400).json({
+          message: "Title and query are required fields"
+        });
+      }
+
+      const [newQuery] = await db
+        .insert(healthCheckQueries)
+        .values({
+          title,
+          query,
+          runOnAllInstances,
+          active,
+          userId: req.user?.id,
+          displayOrder: (await db.select({ count: sql<number>`count(*)` }).from(healthCheckQueries))[0].count
+        })
+        .returning();
+
+      console.log('Created new health check query:', newQuery);
+
+      res.json(newQuery);
+    } catch (error) {
+      console.error("Error creating health check query:", error);
+      res.status(500).json({
+        message: "Failed to create health check query",
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  app.get("/api/health-check-queries", requireAuth, async (req, res) => {
+    try {
+      const queries = await db
+        .select()
+        .from(healthCheckQueries)
+        .orderBy(healthCheckQueries.displayOrder);
+
+      res.json(queries);
+    } catch (error) {
+      console.error("Error fetching health check queries:", error);
+      res.status(500).json({
+        message: "Failed to fetch health check queries",
+        error: error instanceof Error ? error.message : String(error)
+      });
     }
   });
 
@@ -1948,12 +2005,11 @@ const databaseMetricsQueries = {
       CASE
         WHEN expected_pages = 0 THEN 0
         ELSE round((bloat_pages::numeric / expected_pages::numeric)::numeric, 1)
+        ELSE round((bloat_pages::numeric / expected_pages::numeric)::numeric, 1)
       END AS bloat_ratio
     FROM table_bloat
     CROSS JOIN constants
     WHERE bloat_pages > 0
-    ORDER BY bloat_pages DESC
-    LIMIT 10;
   `,
 
   unusedIndexes: `

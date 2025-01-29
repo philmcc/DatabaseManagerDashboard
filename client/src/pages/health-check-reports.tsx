@@ -1,8 +1,6 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { useToast } from "@/hooks/use-toast";
-import { Activity, RefreshCw } from "lucide-react";
+import { Activity } from "lucide-react";
 import BaseLayout from "@/components/layout/base-layout";
 import { format } from "date-fns";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -35,9 +33,6 @@ interface HealthCheckExecution {
 }
 
 export default function HealthCheckReports() {
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
-
   // Fetch the latest execution
   const { data: latestExecution, isLoading: isLoadingLatest } = useQuery<HealthCheckExecution>({
     queryKey: ['/api/health-check-executions/latest'],
@@ -46,25 +41,6 @@ export default function HealthCheckReports() {
   // Fetch all executions
   const { data: executions = [], isLoading: isLoadingExecutions } = useQuery<HealthCheckExecution[]>({
     queryKey: ['/api/health-check-executions'],
-  });
-
-  // Run health check mutation
-  const runMutation = useMutation({
-    mutationFn: async () => {
-      const response = await fetch('/api/health-check-executions', {
-        method: 'POST',
-      });
-      if (!response.ok) throw new Error('Failed to run health check');
-      return response.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/health-check-executions'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/health-check-executions/latest'] });
-      toast({
-        title: "Success",
-        description: "Health check started successfully",
-      });
-    },
   });
 
   if (isLoadingLatest || isLoadingExecutions) {
@@ -81,20 +57,6 @@ export default function HealthCheckReports() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="flex justify-end mb-4">
-            <Button
-              onClick={() => runMutation.mutate()}
-              disabled={runMutation.isPending}
-            >
-              {runMutation.isPending ? (
-                <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-              ) : (
-                <RefreshCw className="h-4 w-4 mr-2" />
-              )}
-              Run Health Check
-            </Button>
-          </div>
-
           {latestExecution && latestExecution.results && latestExecution.results.length > 0 ? (
             <>
               <h3 className="text-lg font-semibold mb-4">Latest Results</h3>

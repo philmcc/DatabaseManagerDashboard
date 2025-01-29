@@ -817,9 +817,9 @@ export function registerRoutes(app: Express): Server {
       const whereConditions = req.user.role === 'ADMIN'
         ? eq(instances.id, parseInt(id))
         : and(
-            eq(instances.id, parseInt(id)),
-            eq(instances.userId, req.user.id)
-          );
+          eq(instances.id, parseInt(id)),
+          eq(instances.userId, req.user.id)
+        );
 
       const instance = await db.query.instances.findFirst({
         where: whereConditions,
@@ -1066,11 +1066,10 @@ export function registerRoutes(app: Express): Server {
         console.log('Collecting table statistics');
         const tableStatsResult = await client.query(`
           SELECT 
-            schemaname,
             relname as table_name,
             n_live_tup as row_count,
             pg_size_pretty(pg_relation_size(schemaname || '.' || relname)) as size
-          FROM pg_stat_usertables 
+          FROM pg_stat_user_tables 
           ORDER BY n_live_tup DESC 
           LIMIT 5;
         `);
@@ -1906,6 +1905,199 @@ export function registerRoutes(app: Express): Server {
       res.status(500).json({
         message: "Failed to fetch health check queries",
         error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  // Add cluster health check execution endpoint
+  app.post("/api/health-check-executions", requireAuth, async (req, res) => {
+    try {
+      const { clusterId } = req.body;
+
+      // Create a new execution record
+      const [execution] = await db
+        .insert(healthCheckExecutions)
+        .values({
+          status: 'running',
+          cluster_id: parseInt(clusterId),
+          user_id: req.user!.id,
+        })
+        .returning();
+
+      // Get active queries
+      const queries = await db
+        .select()
+        .from(healthCheckQueries)
+        .where(sql`${healthCheckQueries.active} = true`)
+        .orderBy(healthCheckQueries.displayOrder);
+
+      // Get cluster instances
+      const instances = await db
+        .select()
+        .from(instances)
+        .where(eq(instances.clusterId, parseInt(clusterId)));
+
+      // For each query and applicable instance, create a result record
+      for (const query of queries) {
+        // If query should run on all instances, run it on all of them
+        // Otherwise, only run on writer instance
+        const targetInstances = query.runOnAllInstances
+          ? instances
+          : instances.filter(instance => instance.isWriter);
+
+        for (const instance of targetInstances) {
+          try {
+            // Create a client for this instance
+            const client = new Client({
+              host: instance.hostname,
+              port: instance.port,
+              user: instance.username,
+              password: instance.password,
+              database: instance.defaultDatabaseName || 'postgres',
+              ssl: { rejectUnauthorized: false }
+            });
+
+            await client.connect();
+
+            // Execute the query
+            const queryResult = await client.query(query.query);
+            await client.end();
+
+            // Store the results
+            await db.insert(healthCheckResults).values({
+              execution_id: execution.id,
+              query_id: query.id,
+              instance_id: instance.id,
+              results: queryResult.rows,
+            });
+          } catch (error: any) {
+            // Store the error
+            await db.insert(healthCheckResults).values({
+              execution_id: execution.id,
+              query_id: query.id,
+              instance_id: instance.id,
+              error: error.message,
+            });
+          }
+        }
+      }
+
+      // Update execution status to completed
+      const [updatedExecution] = await db
+        .update(healthCheckExecutions)
+        .set({
+          status: 'completed',
+          completedAt: new Date(),
+        })
+        .where(eq(healthCheckExecutions.id, execution.id))
+        .returning();
+
+      // Generate markdown report
+      let markdownReport = `# Health Check Report\n\n`;
+      markdownReport += `## Summary\n`;
+      markdownReport += `- Cluster: ${(await db.query.clusters.findFirst({ where: eq(clusters.id, parseInt(clusterId)) }))?.name}\n`;
+      markdownReport += `- Started: ${execution.startedAt}\n`;
+      markdownReport += `- Completed: ${updatedExecution.completedAt}\n\n`;
+
+      // Get all results for this execution
+      const results = await db.query.healthCheckResults.findMany({
+        where: eq(healthCheckResults.execution_id, execution.id),
+        with: {
+          query: true,
+          instance: true,
+        },
+      });
+
+      // Group results by query
+      const resultsByQuery = results.reduce((acc: any, result) => {
+        if (!acc[result.query.title]) {
+          acc[result.query.title] = [];
+        }
+        acc[result.query.title].push(result);
+        return acc;
+      }, {});
+
+      // Process results and generate markdown
+      for (const [queryTitle, queryResults] of Object.entries<any>(resultsByQuery)) {
+        markdownReport += `\n## ${queryTitle}\n\n`;
+
+        for (const result of queryResults) {
+          markdownReport += `### Instance: ${result.instance.hostname}:${result.instance.port}\n\n`;
+
+          if (result.error) {
+            markdownReport += `❌ Error: ${result.error}\n\n`;
+          } else if (result.results && result.results.length > 0) {
+            // Create table header
+            const headers = Object.keys(result.results[0]);
+            markdownReport += `| ${headers.join(' | ')} |\n`;
+            markdownReport += `| ${headers.map(() => '---').join(' | ')} |\n`;
+
+            // Add table rows
+            for (const row of result.results) {
+              markdownReport += `| ${headers.map(header => row[header] || '').join(' | ')} |\n`;
+            }
+            markdownReport += '\n';
+          } else {
+            markdownReport += `✅ Query executed successfully (no results)\n\n`;
+          }
+        }
+      }
+
+      // Save the report
+      await db.insert(healthCheckReports).values({
+        cluster_id: parseInt(clusterId),
+        user_id: req.user!.id,
+        status: 'completed',
+        markdown: markdownReport,
+        completedAt: new Date(),
+      });
+
+      res.json(updatedExecution);
+    } catch (error) {
+      console.error('Health check execution error:', error);
+      res.status(500).json({
+        message: 'Error executing health check',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // Get latest execution for a cluster
+  app.get("/api/health-check-executions/latest", requireAuth, async (req, res) => {
+    try {
+      const latest = await db.query.healthCheckExecutions.findFirst({
+        orderBy: (executions, { desc }) => [desc(executions.startedAt)],
+      });
+      res.json(latest || null);
+    } catch (error) {
+      console.error('Latest execution fetch error:', error);
+      res.status(500).json({
+        message: 'Error fetching latest execution',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // Get all executions
+  app.get("/api/health-check-executions", requireAuth, async (req, res) => {
+    try {
+      const executions = await db.query.healthCheckExecutions.findMany({
+        orderBy: (executions, { desc }) => [desc(executions.startedAt)],
+        with: {
+          cluster: true,
+          user: {
+            columns: {
+              username: true,
+            },
+          },
+        },
+      });
+      res.json(executions);
+    } catch (error) {
+      console.error('Executions fetch error:', error);
+      res.status(500).json({
+        message: 'Error fetching executions',
+        error: error instanceof Error ? error.message : String(error),
       });
     }
   });

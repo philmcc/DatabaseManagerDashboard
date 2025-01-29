@@ -5,6 +5,13 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Form,
   FormControl,
   FormField,
@@ -17,7 +24,7 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Activity, GripVertical } from "lucide-react";
+import { Activity, GripVertical, Play } from "lucide-react";
 import {
   Accordion,
   AccordionContent,
@@ -47,14 +54,51 @@ export default function HealthCheckQueries() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [selectedClusterId, setSelectedClusterId] = useState<string>("");
 
   // Fetch queries
   const { data: queries = [], isLoading: isLoadingQueries } = useQuery<HealthCheckQuery[]>({
     queryKey: ['/api/health-check-queries'],
+    queryFn: async () => {
+      const response = await fetch('/api/health-check-queries');
+      if (!response.ok) throw new Error('Failed to fetch queries');
+      return response.json();
+    },
+  });
+
+  // Fetch clusters for the run report dropdown
+  const { data: clusters = [] } = useQuery({
+    queryKey: ['/api/clusters'],
+    queryFn: async () => {
+      const response = await fetch('/api/clusters');
+      if (!response.ok) throw new Error('Failed to fetch clusters');
+      return response.json();
+    },
+  });
+
+  // Run health check mutation
+  const runHealthCheck = useMutation({
+    mutationFn: async (clusterId: string) => {
+      const response = await fetch('/api/health-check-executions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clusterId }),
+      });
+      if (!response.ok) throw new Error('Failed to run health check');
+      return response.json();
+    },
+    onSuccess: (data) => {
+      toast({
+        title: "Success",
+        description: "Health check started successfully",
+      });
+      // Redirect to reports page
+      window.location.href = '/health-check/reports';
+    },
     onError: (error: Error) => {
       toast({
         title: "Error",
-        description: `Failed to load queries: ${error.message}`,
+        description: error.message,
         variant: "destructive",
       });
     },
@@ -211,6 +255,42 @@ export default function HealthCheckQueries() {
           </CardTitle>
         </CardHeader>
         <CardContent>
+          {/* Run Report Section */}
+          <div className="mb-8 flex items-end gap-4">
+            <div className="flex-1">
+              <FormLabel>Select Cluster</FormLabel>
+              <Select value={selectedClusterId} onValueChange={setSelectedClusterId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a cluster to run health check" />
+                </SelectTrigger>
+                <SelectContent>
+                  {clusters.map((cluster: any) => (
+                    <SelectItem key={cluster.id} value={cluster.id.toString()}>
+                      {cluster.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              variant="default"
+              onClick={() => selectedClusterId && runHealthCheck.mutate(selectedClusterId)}
+              disabled={!selectedClusterId || runHealthCheck.isPending}
+            >
+              {runHealthCheck.isPending ? (
+                <>
+                  <Activity className="mr-2 h-4 w-4 animate-spin" />
+                  Running...
+                </>
+              ) : (
+                <>
+                  <Play className="mr-2 h-4 w-4" />
+                  Run Report
+                </>
+              )}
+            </Button>
+          </div>
+
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
               <FormField

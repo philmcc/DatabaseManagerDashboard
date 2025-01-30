@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useParams } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,6 +7,7 @@ import { Edit2, Database, Server } from "lucide-react";
 import { Loader2 } from "lucide-react";
 import type { SelectInstance, SelectDatabaseConnection } from "@db/schema";
 import Navbar from "@/components/layout/navbar";
+import { useToast } from "@/hooks/use-toast";
 
 interface InstanceWithDatabases extends SelectInstance {
   databases: SelectDatabaseConnection[];
@@ -19,6 +20,8 @@ interface InstanceWithDatabases extends SelectInstance {
 function InstanceDetails() {
   const [location, navigate] = useLocation();
   const params = useParams<{ id: string }>();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const { data: instance, isLoading } = useQuery<InstanceWithDatabases>({
     queryKey: ['/api/instances', params.id],
@@ -31,6 +34,28 @@ function InstanceDetails() {
       }
       return response.json();
     }
+  });
+
+  const { mutate: deleteInstance } = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/instances/${params.id}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+
+      if (!res.ok) {
+        const error = await res.text();
+        throw new Error(error);
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/instances'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/clusters'] });
+      window.location.href = `/clusters/${instance?.cluster.id}`;
+    },
+    onError: (error: Error) => {
+      alert(`Deletion failed: ${error.message}`);
+    },
   });
 
   if (isLoading) {
@@ -68,6 +93,17 @@ function InstanceDetails() {
               </Link>
             </Button>
           )}
+          <Button
+            variant="destructive"
+            onClick={() => {
+              if (confirm("Are you sure you want to delete this instance? All associated databases must be deleted first.")) {
+                deleteInstance();
+              }
+            }}
+            className="ml-2"
+          >
+            Delete Instance
+          </Button>
         </div>
 
         <div className="grid gap-6 md:grid-cols-2">

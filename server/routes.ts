@@ -2123,6 +2123,45 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
+  // Add instance deletion endpoint
+  app.delete("/api/instances/:id", requireWriterOrAdmin, async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { id } = req.params;
+      const instanceId = parseInt(id);
+
+      // Check for existing databases
+      const databases = await db.query.databaseConnections.findMany({
+        where: eq(databaseConnections.instanceId, instanceId)
+      });
+
+      if (databases.length > 0) {
+        return res.status(409).json({
+          message: "Cannot delete instance with existing databases",
+          databaseCount: databases.length
+        });
+      }
+
+      await db.delete(instances).where(
+        and(
+          eq(instances.id, instanceId),
+          eq(instances.userId, req.user.id)
+        )
+      );
+
+      res.status(204).send();
+    } catch (error) {
+      console.error("Instance deletion error:", error);
+      res.status(500).json({
+        error: "Error deleting instance",
+        details: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

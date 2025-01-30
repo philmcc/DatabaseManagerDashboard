@@ -74,14 +74,27 @@ export default function DatabaseForm() {
       try {
         const res = await fetch("/api/test-connection", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(values),
+          headers: { 
+            "Content-Type": "application/json",
+            "Accept": "application/json" // Explicitly request JSON
+          },
+          body: JSON.stringify({
+            instanceId: values.instanceId,
+            username: values.username,
+            password: values.password,
+            databaseName: values.databaseName
+          }),
           credentials: "include",
         });
 
+        const contentType = res.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          throw new Error('Server returned unexpected response format');
+        }
+
         if (!res.ok) {
-          const error = await res.text();
-          throw new Error(error);
+          const errorData = await res.json();
+          throw new Error(errorData.message || errorData.error || 'Connection test failed');
         }
 
         return res.json();

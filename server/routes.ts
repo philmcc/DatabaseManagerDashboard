@@ -997,48 +997,20 @@ export function registerRoutes(app: Express): Server {
 
   // Update metrics endpoint with proper access control
   app.get("/api/databases/:id/metrics", requireAuth, async (req, res) => {
-    console.log('Metrics endpoint called for database ID:', req.params.id);
-
     try {
       const { id } = req.params;
-      const parsedId = parseInt(id);
-
-      console.log('Fetching database connection details');
-      // Get database connection details
       const dbConnection = await db.query.databaseConnections.findFirst({
-        where: eq(databaseConnections.id, parsedId),
+        where: eq(databaseConnections.id, parseInt(id)),
         with: {
-          instance: {
-            columns: {
-              hostname: true,
-              port: true,
-            },
-          },
-        },
-      });
-
-      console.log('Database connection query result:', {
-        found: !!dbConnection,
-        hasInstance: !!dbConnection?.instance,
-        connectionDetails: dbConnection ? {
-          id: dbConnection.id,
-          name: dbConnection.name,
-          databaseName: dbConnection.databaseName,
-          instance: dbConnection.instance ? {
-            hostname: dbConnection.instance.hostname,
-            port: dbConnection.instance.port
-          } : null
-        } : null
+          instance: true
+        }
       });
 
       if (!dbConnection || !dbConnection.instance) {
-        console.log('Database connection or instance not found');
-        return res.status(404).json({
-          message: "Database connection or instance not found",
-        });
+        return res.status(404).json({ message: "Database connection or instance not found" });
       }
 
-      console.log('Creating database client with connection details');
+      // Connect to database and collect metrics
       const client = new Client({
         host: dbConnection.instance.hostname,
         port: dbConnection.instance.port,
@@ -1048,99 +1020,71 @@ export function registerRoutes(app: Express): Server {
         ssl: { rejectUnauthorized: false }
       });
 
-      console.log('Attempting to connect to database');
-      try {
-        await client.connect();
-        console.log('Successfully connected to database');
+      await client.connect();
 
-        const metrics = {
-          timestamp: new Date().toISOString(),
-          connections: 0,
-          databaseSize: '0',
-          slowQueries: 0,
-          cacheHitRatio: 0,
-          tableStats: [],
-        };
+      const metrics: Record<string, any> = {};
 
-        console.log('Collecting active connections');
-        const connectionsResult = await client.query(
-          "SELECT count(*) as count FROM pg_stat_activity WHERE datname = $1",
-          [dbConnection.databaseName]
-        );
-        metrics.connections = parseInt(connectionsResult.rows[0].count);
-        console.log('Active connections:', metrics.connections);
+      // Get database size
+      const sizeResult = await client.query(
+        "SELECT pg_size_pretty(pg_database_size($1)) as size",
+        [dbConnection.databaseName]
+      );
+      metrics.databaseSize = sizeResult.rows[0].size;
 
-        console.log('Collecting database size');
-        const sizeResult = await client.query(
-          "SELECT pg_size_pretty(pg_database_size($1)) as size",
-          [dbConnection.databaseName]
-        );
-        metrics.databaseSize = sizeResult.rows[0].size;
-        console.log('Database size:', metrics.databaseSize);
+      // Get table statistics
+      const tableStatsResult = await client.query(`
+        SELECT 
+          schemaname,
+          relname as table_name,
+          n_live_tup as row_count,
+          n_dead_tup as dead_tuples,
+          last_vacuum,
+          last_autovacuum,
+          last_analyze,
+          last_autoanalyze
+        FROM pg_stat_user_tables
+        ORDER BY n_live_tup DESC
+      `);
+      metrics.tableStats = tableStatsResult.rows;
 
-        console.log('Collecting table statistics');
-        const tableStatsResult = await client.query(`
-          SELECT 
-            relname as table_name,
-            n_live_tup as row_count,
-            pg_size_pretty(pg_relation_size(schemaname || '.' || relname)) as size
-          FROM pg_stat_user_tables          ORDER BY n_livetup DESC 
-                    LIMIT 5;
-        `);        metrics.tableStats = tableStatsResult.rows;
-        console.log('Table statistics:', metrics.tableStats);
+      // Get connection stats
+      const connectionStatsResult = await client.query(`
+        SELECT count(*) as active_connections 
+        FROM pg_stat_activity 
+        WHERE datname = $1
+      `, [dbConnection.databaseName]);
+      metrics.activeConnections = connectionStatsResult.rows[0].active_connections;
 
-        console.log('Collecting cache statistics');
-        const cacheResult = await client.query(databaseMetricsQueries.bufferCacheHitRatio);
+      await client.end();
 
-        const heapHit = parseInt(cacheResult.rows[0].heap_hit);
-        const heapRead = parseInt(cacheResult.rows[0].heap_read);
-        metrics.cacheHitRatio = heapRead + heapHit === 0
-          ? 0
-          : Math.round((heapHit / (heapRead + heapHit)) * 100);
-        console.log('Cache hit ratio:', metrics.cacheHitRatio);
+      // Store metrics in database
+      const [storedMetrics] = await db
+        .insert(databaseMetrics)
+        .values({
+          databaseId: parseInt(id),
+          metrics: metrics,
+          collectedAt: new Date(),
+        })
+        .returning();
 
-        console.log('Closing database connection');
-        await client.end();
-
-        console.log('Sending metrics response:', metrics);
-        res.json(metrics);
-      } catch (error) {
-        console.error('Error during metrics collection:', error);
-        try {
-          await client.end();
-        } catch (closeError) {
-          console.error('Error closing client after collection error:', closeError);
-        }
-        throw error; // Re-throw to be caught by outer catch block
-      }
+      res.json(metrics);
     } catch (error) {
       console.error("Metrics collection error:", error);
       res.status(500).json({
-        message: "Failed to collect database metrics",
-        error: error instanceof Error ? error.message : String(error)
+        message: "Error collecting metrics",
+        error: error instanceof Error ? error.message : String(error),
       });
     }
   });
 
   // Clusters Management Endpoints
-  // Modified clusters fetch endpoint
   app.get("/api/clusters", requireAuth, async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).send("Not authenticated");
-    }
-
     try {
-      // For admin users, show all clusters
-      // For other users, show only their own clusters
-      const where = req.user.role === 'ADMIN'
-        ? undefined
-        : eq(clusters.userId, req.user.id);
-
       const userClusters = await db.query.clusters.findMany({
-        where,
         with: {
           instances: true,
         },
+        where: req.user.role === 'ADMIN' ? undefined : eq(clusters.userId, req.user.id),
       });
 
       res.json(userClusters);
@@ -1244,6 +1188,52 @@ export function registerRoutes(app: Express): Server {
     } catch (error) {
       console.error("Cluster update error:", error);
       res.status(500).send("Error updating cluster");
+    }
+  });
+
+  // Full corrected cluster deletion endpoint from edited snippet
+  app.delete("/api/clusters/:id", requireWriterOrAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const clusterId = parseInt(id);
+
+      // Check for existing instances
+      const existingInstances = await db.query.instances.findMany({
+        where: eq(instances.clusterId, clusterId)
+      });
+
+      if (existingInstances.length > 0) {
+        return res.status(409).json({
+          message: "Cannot delete cluster with existing instances",
+          instanceCount: existingInstances.length
+        });
+      }
+
+      // If no instances exist, proceed with deletion
+      // Add user check to ensure they can only delete their own clusters
+      const [deletedCluster] = await db
+        .delete(clusters)
+        .where(
+          and(
+            eq(clusters.id, clusterId),
+            req.user.role === 'ADMIN' ? undefined : eq(clusters.userId, req.user.id)
+          )
+        )
+        .returning();
+
+      if (!deletedCluster) {
+        return res.status(404).json({
+          message: "Cluster not found or you don't have permission to delete it"
+        });
+      }
+
+      res.status(204).send();
+    } catch (error) {
+      console.error("Cluster deletion error:", error);
+      res.status(500).json({
+        error: "Error deleting cluster",
+        details: error instanceof Error ? error.message : String(error)
+      });
     }
   });
 
@@ -1732,7 +1722,7 @@ export function registerRoutes(app: Express): Server {
     }
 
     try {
-      const { title, query, runOnAllInstances, active } = req.body;
+      const { title, query, runOnAllInstances, active, instanceId, name, expectedRows, interval, timeout, alertOnFailure } = req.body;
 
       // Validate required fields
       if (!title || !query) {
@@ -1889,7 +1879,8 @@ export function registerRoutes(app: Express): Server {
             });
 
             // Add results to markdown report
-            if (queryResult.rows.length > 0) {              // Create markdown table header
+            if (queryResult.rows.length > 0) {
+              // Create markdown table header
               const headers = Object.keys(queryResult.rows[0]);
               markdownReport += `| ${headers.join(' | ')} |\n`;
               markdownReport += `| ${headers.map(() => '---').join(' | ')} |\n`;
@@ -2028,7 +2019,7 @@ export function registerRoutes(app: Express): Server {
       }
 
       const { instanceId, username, password, databaseName } = req.body;
-      
+
       if (!instanceId || !username || !password || !databaseName) {
         return res.status(400).json({ message: "Missing required fields" });
       }
@@ -2071,7 +2062,7 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  // Add after the existing POST endpoint
+  // Add after the existing POST endpoint from edited snippet
   app.delete("/api/databases/:id", requireWriterOrAdmin, async (req, res) => {
     if (!req.isAuthenticated()) {
       console.log('Delete attempt by unauthenticated user');
@@ -2101,7 +2092,7 @@ export function registerRoutes(app: Express): Server {
       await db.transaction(async (tx) => {
         console.log(`Deleting tags for database ${id}`);
         await tx.delete(databaseTags).where(eq(databaseTags.databaseId, parseInt(id)));
-        
+
         console.log(`Deleting logs for database ${id}`);
         await tx.delete(databaseOperationLogs).where(eq(databaseOperationLogs.databaseId, parseInt(id)));
 
@@ -2116,7 +2107,7 @@ export function registerRoutes(app: Express): Server {
       res.status(204).send();
     } catch (error) {
       console.error("Database deletion error:", error);
-      res.status(500).json({ 
+      res.status(500).json({
         error: "Error deleting database connection",
         details: error instanceof Error ? error.message : "Unknown error"
       });
@@ -2162,41 +2153,48 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  // Full corrected cluster deletion endpoint
+  // Full corrected cluster deletion endpoint from edited snippet
   app.delete("/api/clusters/:id", requireWriterOrAdmin, async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).send("Not authenticated");
-    }
-
     try {
       const { id } = req.params;
       const clusterId = parseInt(id);
 
-      // Check for existing instances - CORRECTED TABLE NAME
-      const instances = await db.query.instances.findMany({
-        where: eq(instances.cluster_id, clusterId) // CORRECTED FIELD NAME
+      // Check for existing instances
+      const existingInstances = await db.query.instances.findMany({
+        where: eq(instances.clusterId, clusterId)
       });
 
-      if (instances.length > 0) {
+      if (existingInstances.length > 0) {
         return res.status(409).json({
           message: "Cannot delete cluster with existing instances",
-          instanceCount: instances.length
+          instanceCount: existingInstances.length
         });
       }
 
-      await db.delete(clusters).where(
-        and(
-          eq(clusters.id, clusterId),
-          eq(clusters.userId, req.user.id)
+      // If no instances exist, proceed with deletion
+      // Add user check to ensure they can only delete their own clusters
+      const [deletedCluster] = await db
+        .delete(clusters)
+        .where(
+          and(
+            eq(clusters.id, clusterId),
+            req.user.role === 'ADMIN' ? undefined : eq(clusters.userId, req.user.id)
+          )
         )
-      );
+        .returning();
+
+      if (!deletedCluster) {
+        return res.status(404).json({
+          message: "Cluster not found or you don't have permission to delete it"
+        });
+      }
 
       res.status(204).send();
     } catch (error) {
       console.error("Cluster deletion error:", error);
       res.status(500).json({
         error: "Error deleting cluster",
-        details: error instanceof Error ? error.message : "Unknown error"
+        details: error instanceof Error ? error.message : String(error)
       });
     }
   });

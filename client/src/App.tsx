@@ -76,17 +76,17 @@ function Router() {
       <Route path="/clusters/:id/edit">
         {user?.role !== 'READER' ? <ClusterForm /> : <Home />}
       </Route>
-      <Route path="/clusters/:clusterId/instances/:id">
-        {user ? <InstanceDetails /> : <Home />}
-      </Route>
-      <Route path="/instances/:id">
-        {user ? <InstanceDetails /> : <Home />}
-      </Route>
       <Route path="/clusters/:clusterId/instances/new">
         {user?.role !== 'READER' ? <InstanceForm /> : <Home />}
       </Route>
       <Route path="/clusters/:clusterId/instances/:id/edit">
         {user?.role !== 'READER' ? <InstanceForm /> : <Home />}
+      </Route>
+      <Route path="/clusters/:clusterId/instances/:id">
+        <InstanceDetails />
+      </Route>
+      <Route path="/instances/:id" match={(params) => !params.id.includes('/')}>
+        {user ? <InstanceDetails /> : <Home />}
       </Route>
       <Route path="/users">
         {user?.role === 'ADMIN' ? <UserManagement /> : <Home />}

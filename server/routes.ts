@@ -1119,40 +1119,41 @@ export function registerRoutes(app: Express): Server {
 
   // Modified cluster details endpoint
   app.get("/api/clusters/:id", requireAuth, async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).send("Not authenticated");
-    }
-
     try {
       const { id } = req.params;
-      const cluster = await db
-        .select()
-        .from(clusters)
-        .where(
-          and(
-            eq(clusters.id, parseInt(id)),
-            eq(clusters.userId, req.user.id)
-          )
-        )
-        .limit(1);
+      const clusterId = parseInt(id);
 
-      if (!cluster.length) {
-        return res.status(404).send("Cluster not found");
+      // Build where conditions
+      let whereCondition;
+      if (req.user.role !== 'ADMIN') {
+        whereCondition = and(
+          eq(clusters.id, clusterId),
+          eq(clusters.userId, req.user.id)
+        );
+      } else {
+        whereCondition = eq(clusters.id, clusterId);
       }
 
-      // Fetch instances separately
-      const clusterInstances = await db
-        .select()
-        .from(instances)
-        .where(eq(instances.cluster_id, parseInt(id)));
-
-      res.json({
-        ...cluster[0],
-        instances: clusterInstances
+      const cluster = await db.query.clusters.findFirst({
+        where: whereCondition,
+        with: {
+          instances: true,
+        },
       });
+
+      if (!cluster) {
+        return res.status(404).json({
+          message: "Cluster not found or you don't have permission to view it"
+        });
+      }
+
+      res.json(cluster);
     } catch (error) {
       console.error("Cluster fetch error:", error);
-      res.status(500).send("Error fetching cluster");
+      res.status(500).json({
+        message: "Error fetching cluster details",
+        error: error instanceof Error ? error.message : String(error)
+      });
     }
   });
 

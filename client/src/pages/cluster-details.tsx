@@ -97,11 +97,9 @@ function ClusterDetails() {
 
         <div className="flex justify-between items-center">
           <h2 className="text-2xl font-bold">Instances</h2>
-          <Button asChild>
-            <Link href={`/clusters/${params.id}/instances/new`}>
-              <PlusCircle className="mr-2 h-4 w-4" />
-              Add Instance
-            </Link>
+          <Button onClick={() => navigate(`/clusters/${params.id}/instances/new`)}>
+            <PlusCircle className="mr-2 h-4 w-4" />
+            Add Instance
           </Button>
         </div>
 

@@ -51,13 +51,10 @@ function InstanceForm() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  // Only consider it editing if we have an ID and it's not 'new'
-  const isEditing = !!params.id && params.id !== 'new';
-
-  // Only fetch instance data if we're editing an existing instance
+  // Only fetch instance data if we're editing (id exists and is not 'new')
   const { data: instance, isLoading: isLoadingInstance } = useQuery<SelectInstance>({
     queryKey: [`/api/instances/${params.id}`],
-    enabled: isEditing,
+    enabled: !!params.id && params.id !== 'new',
   });
 
   // Always fetch cluster data since we need it for both edit and create
@@ -73,7 +70,7 @@ function InstanceForm() {
 
   // Update form values when editing and instance data is loaded
   React.useEffect(() => {
-    if (isEditing && instance) {
+    if (!!params.id && params.id !== 'new' && instance) {
       form.reset({
         hostname: instance.hostname,
         port: instance.port,
@@ -84,7 +81,7 @@ function InstanceForm() {
         defaultDatabaseName: instance.defaultDatabaseName || "",
       });
     }
-  }, [instance, form, isEditing]);
+  }, [instance, form, params.id]);
 
   const testConnection = useMutation({
     mutationFn: async (values: FormData) => {
@@ -118,12 +115,12 @@ function InstanceForm() {
 
   const mutation = useMutation({
     mutationFn: async (values: FormData) => {
-      const endpoint = isEditing
+      const endpoint = params.id && params.id !== 'new'
         ? `/api/instances/${params.id}`
         : `/api/clusters/${params.clusterId}/instances`;
 
       const response = await fetch(endpoint, {
-        method: isEditing ? "PATCH" : "POST",
+        method: params.id && params.id !== 'new' ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(values),
         credentials: "include",
@@ -138,12 +135,12 @@ function InstanceForm() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/clusters/${params.clusterId}`] });
-      if (isEditing) {
+      if (params.id && params.id !== 'new') {
         queryClient.invalidateQueries({ queryKey: [`/api/instances/${params.id}`] });
       }
       toast({
         title: "Success",
-        description: `Instance ${isEditing ? "updated" : "created"} successfully`,
+        description: `Instance ${params.id && params.id !== 'new' ? "updated" : "created"} successfully`,
       });
       navigate(`/clusters/${params.clusterId}`);
     },
@@ -156,8 +153,8 @@ function InstanceForm() {
     },
   });
 
-  // Only show loading state while we're waiting for required data
-  if ((isEditing && isLoadingInstance) || isLoadingCluster) {
+  // Only show loading state if we're waiting for required data
+  if (isLoadingCluster || (params.id && params.id !== 'new' && isLoadingInstance)) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <Loader2 className="h-8 w-8 animate-spin text-border" />
@@ -165,32 +162,7 @@ function InstanceForm() {
     );
   }
 
-  // Show error if we're editing and can't find the instance
-  if (isEditing && !instance) {
-    return (
-      <div>
-        <Navbar />
-        <div className="container mx-auto py-6">
-          <Card>
-            <CardContent className="py-8">
-              <div className="text-center text-muted-foreground">
-                <p>Instance not found.</p>
-                <Button 
-                  variant="link" 
-                  onClick={() => navigate("/clusters")}
-                  className="mt-4"
-                >
-                  Back to Clusters
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    );
-  }
-
-  // Show error if we can't find the cluster (needed for both edit and create)
+  // Show error if the cluster is not found (needed for both edit and create)
   if (!cluster) {
     return (
       <div>
@@ -215,6 +187,31 @@ function InstanceForm() {
     );
   }
 
+  // Show error if we're editing and can't find the instance
+  if (params.id && params.id !== 'new' && !instance) {
+    return (
+      <div>
+        <Navbar />
+        <div className="container mx-auto py-6">
+          <Card>
+            <CardContent className="py-8">
+              <div className="text-center text-muted-foreground">
+                <p>Instance not found.</p>
+                <Button 
+                  variant="link" 
+                  onClick={() => navigate(`/clusters/${params.clusterId}`)}
+                  className="mt-4"
+                >
+                  Back to Cluster
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
   const onSubmit = (data: FormData) => {
     mutation.mutate(data);
   };
@@ -230,7 +227,7 @@ function InstanceForm() {
       <div className="container mx-auto py-6">
         <div className="max-w-2xl mx-auto">
           <h1 className="text-3xl font-bold mb-6">
-            {isEditing ? "Edit Instance" : `New Instance for ${cluster.name}`}
+            {params.id && params.id !== 'new' ? "Edit Instance" : `New Instance for ${cluster.name}`}
           </h1>
           <Card>
             <CardHeader>
@@ -398,10 +395,10 @@ function InstanceForm() {
                         {mutation.isPending ? (
                           <>
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            {isEditing ? "Updating..." : "Creating..."}
+                            {params.id && params.id !== 'new' ? "Updating..." : "Creating..."}
                           </>
                         ) : (
-                          isEditing ? "Update Instance" : "Create Instance"
+                          params.id && params.id !== 'new' ? "Update Instance" : "Create Instance"
                         )}
                       </Button>
                     </div>

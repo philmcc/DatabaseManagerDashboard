@@ -52,14 +52,15 @@ function InstanceForm() {
   const queryClient = useQueryClient();
   const isEditing = !!params.id;
 
+  // Only fetch instance data if we're editing and have a valid numeric ID
   const { data: instance, isLoading: isLoadingInstance } = useQuery<SelectInstance>({
     queryKey: [`/api/instances/${params.id}`],
-    enabled: isEditing,
+    enabled: isEditing && !isNaN(Number(params.id)),
   });
 
   const { data: cluster, isLoading: isLoadingCluster } = useQuery<SelectCluster>({
     queryKey: [`/api/clusters/${params.clusterId}`],
-    enabled: !!params.clusterId,
+    enabled: !!params.clusterId && !isNaN(Number(params.clusterId)),
   });
 
   const form = useForm<FormData>({
@@ -160,7 +161,7 @@ function InstanceForm() {
     );
   }
 
-  // If we're not editing and there's no cluster found, show an error
+  // Only show cluster not found error when we're creating a new instance
   if (!isEditing && !cluster) {
     return (
       <div>

@@ -50,17 +50,20 @@ function InstanceForm() {
   const params = useParams<{ id?: string; clusterId: string }>();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  // Only consider it editing if we have an ID and it's not 'new'
   const isEditing = !!params.id && params.id !== 'new';
 
-  // Only fetch instance data if we're editing (and have a numeric ID)
+  // Only fetch instance data if we're editing an existing instance
   const { data: instance, isLoading: isLoadingInstance } = useQuery<SelectInstance>({
     queryKey: [`/api/instances/${params.id}`],
-    enabled: isEditing && !isNaN(Number(params.id)),
+    enabled: isEditing,
   });
 
+  // Always fetch cluster data since we need it for both edit and create
   const { data: cluster, isLoading: isLoadingCluster } = useQuery<SelectCluster>({
     queryKey: [`/api/clusters/${params.clusterId}`],
-    enabled: !!params.clusterId && !isNaN(Number(params.clusterId)),
+    enabled: !!params.clusterId,
   });
 
   const form = useForm<FormData>({
@@ -68,7 +71,7 @@ function InstanceForm() {
     defaultValues: defaultFormValues,
   });
 
-  // Update form values only when editing and instance data is loaded
+  // Update form values when editing and instance data is loaded
   React.useEffect(() => {
     if (isEditing && instance) {
       form.reset({
@@ -153,6 +156,7 @@ function InstanceForm() {
     },
   });
 
+  // Only show loading state while we're waiting for required data
   if ((isEditing && isLoadingInstance) || isLoadingCluster) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -161,8 +165,33 @@ function InstanceForm() {
     );
   }
 
-  // Only show cluster not found error when we're creating a new instance
-  if (!isEditing && !cluster) {
+  // Show error if we're editing and can't find the instance
+  if (isEditing && !instance) {
+    return (
+      <div>
+        <Navbar />
+        <div className="container mx-auto py-6">
+          <Card>
+            <CardContent className="py-8">
+              <div className="text-center text-muted-foreground">
+                <p>Instance not found.</p>
+                <Button 
+                  variant="link" 
+                  onClick={() => navigate("/clusters")}
+                  className="mt-4"
+                >
+                  Back to Clusters
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
+  // Show error if we can't find the cluster (needed for both edit and create)
+  if (!cluster) {
     return (
       <div>
         <Navbar />
@@ -201,7 +230,7 @@ function InstanceForm() {
       <div className="container mx-auto py-6">
         <div className="max-w-2xl mx-auto">
           <h1 className="text-3xl font-bold mb-6">
-            {isEditing ? "Edit Instance" : `New Instance for ${cluster?.name || ''}`}
+            {isEditing ? "Edit Instance" : `New Instance for ${cluster.name}`}
           </h1>
           <Card>
             <CardHeader>

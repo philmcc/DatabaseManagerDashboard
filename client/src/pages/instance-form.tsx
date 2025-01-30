@@ -50,9 +50,9 @@ function InstanceForm() {
   const params = useParams<{ id?: string; clusterId: string }>();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const isEditing = !!params.id;
+  const isEditing = !!params.id && params.id !== 'new';
 
-  // Only fetch instance data if we're editing and have a valid numeric ID
+  // Only fetch instance data if we're editing (and have a numeric ID)
   const { data: instance, isLoading: isLoadingInstance } = useQuery<SelectInstance>({
     queryKey: [`/api/instances/${params.id}`],
     enabled: isEditing && !isNaN(Number(params.id)),

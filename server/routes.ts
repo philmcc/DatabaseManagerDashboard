@@ -2071,6 +2071,58 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
+  // Add after the existing POST endpoint
+  app.delete("/api/databases/:id", requireWriterOrAdmin, async (req, res) => {
+    if (!req.isAuthenticated()) {
+      console.log('Delete attempt by unauthenticated user');
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { id } = req.params;
+      console.log(`Starting database deletion for ID: ${id} by user ${req.user.id}`);
+
+      const [database] = await db
+        .select()
+        .from(databaseConnections)
+        .where(
+          and(
+            eq(databaseConnections.id, parseInt(id)),
+            eq(databaseConnections.userId, req.user.id)
+          )
+        )
+        .limit(1);
+
+      if (!database) {
+        console.warn(`Database not found: ${id}`);
+        return res.status(404).send("Database not found");
+      }
+
+      await db.transaction(async (tx) => {
+        console.log(`Deleting tags for database ${id}`);
+        await tx.delete(databaseTags).where(eq(databaseTags.databaseId, parseInt(id)));
+        
+        console.log(`Deleting logs for database ${id}`);
+        await tx.delete(databaseOperationLogs).where(eq(databaseOperationLogs.databaseId, parseInt(id)));
+
+        console.log(`Deleting metrics for database ${id}`);
+        await tx.delete(databaseMetrics).where(eq(databaseMetrics.databaseId, parseInt(id)));
+
+        console.log(`Deleting database ${id}`);
+        await tx.delete(databaseConnections).where(eq(databaseConnections.id, parseInt(id)));
+      });
+
+      console.log(`Successfully deleted database ${id}`);
+      res.status(204).send();
+    } catch (error) {
+      console.error("Database deletion error:", error);
+      res.status(500).json({ 
+        error: "Error deleting database connection",
+        details: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

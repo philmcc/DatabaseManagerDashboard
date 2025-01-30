@@ -47,7 +47,7 @@ const defaultFormValues: FormData = {
 
 function InstanceForm() {
   const [_, navigate] = useLocation();
-  const params = useParams<{ id?: string; clusterId: string }>();
+  const params = useParams<{ clusterId: string; id?: string }>();
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -60,7 +60,7 @@ function InstanceForm() {
   // Always fetch cluster data since we need it for both edit and create
   const { data: cluster, isLoading: isLoadingCluster } = useQuery<SelectCluster>({
     queryKey: [`/api/clusters/${params.clusterId}`],
-    enabled: !!params.clusterId,
+    enabled: true,
   });
 
   const form = useForm<FormData>({

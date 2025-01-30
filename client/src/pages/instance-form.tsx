@@ -19,7 +19,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { Loader2 } from "lucide-react";
-import type { SelectInstance } from "@db/schema";
+import type { SelectInstance, SelectCluster } from "@db/schema";
 import React from "react";
 import Navbar from "@/components/layout/navbar";
 
@@ -57,7 +57,7 @@ function InstanceForm() {
     enabled: isEditing,
   });
 
-  const { data: cluster, isLoading: isLoadingCluster } = useQuery({
+  const { data: cluster, isLoading: isLoadingCluster } = useQuery<SelectCluster>({
     queryKey: [`/api/clusters/${params.clusterId}`],
     enabled: !!params.clusterId,
   });
@@ -160,6 +160,31 @@ function InstanceForm() {
     );
   }
 
+  // If we're not editing and there's no cluster found, show an error
+  if (!isEditing && !cluster) {
+    return (
+      <div>
+        <Navbar />
+        <div className="container mx-auto py-6">
+          <Card>
+            <CardContent className="py-8">
+              <div className="text-center text-muted-foreground">
+                <p>Cluster not found.</p>
+                <Button 
+                  variant="link" 
+                  onClick={() => navigate("/clusters")}
+                  className="mt-4"
+                >
+                  Back to Clusters
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
   const onSubmit = (data: FormData) => {
     mutation.mutate(data);
   };
@@ -175,7 +200,7 @@ function InstanceForm() {
       <div className="container mx-auto py-6">
         <div className="max-w-2xl mx-auto">
           <h1 className="text-3xl font-bold mb-6">
-            {isEditing ? "Edit Instance" : `New Instance${cluster ? ` for ${cluster.name}` : ""}`}
+            {isEditing ? "Edit Instance" : `New Instance for ${cluster?.name || ''}`}
           </h1>
           <Card>
             <CardHeader>

@@ -1200,7 +1200,7 @@ export function registerRoutes(app: Express): Server {
       const clusterInstances = await db
         .select()
         .from(instances)
-        .where(eq(instances.clusterId, parseInt(id)));
+        .where(eq(instances.cluster_id, parseInt(id)));
 
       res.json({
         ...cluster[0],
@@ -1281,7 +1281,7 @@ export function registerRoutes(app: Express): Server {
           const clusterInstances = await db
             .select()
             .from(instances)
-            .where(eq(instances.clusterId, parseInt(clusterId)));
+            .where(eq(instances.cluster_id, parseInt(clusterId)));
 
           const masterInstance = clusterInstances.find(i => i.isWriter);
           if (!masterInstance) {
@@ -2157,6 +2157,45 @@ export function registerRoutes(app: Express): Server {
       console.error("Instance deletion error:", error);
       res.status(500).json({
         error: "Error deleting instance",
+        details: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  });
+
+  // Full corrected cluster deletion endpoint
+  app.delete("/api/clusters/:id", requireWriterOrAdmin, async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+
+    try {
+      const { id } = req.params;
+      const clusterId = parseInt(id);
+
+      // Check for existing instances - CORRECTED TABLE NAME
+      const instances = await db.query.instances.findMany({
+        where: eq(instances.cluster_id, clusterId) // CORRECTED FIELD NAME
+      });
+
+      if (instances.length > 0) {
+        return res.status(409).json({
+          message: "Cannot delete cluster with existing instances",
+          instanceCount: instances.length
+        });
+      }
+
+      await db.delete(clusters).where(
+        and(
+          eq(clusters.id, clusterId),
+          eq(clusters.userId, req.user.id)
+        )
+      );
+
+      res.status(204).send();
+    } catch (error) {
+      console.error("Cluster deletion error:", error);
+      res.status(500).json({
+        error: "Error deleting cluster",
         details: error instanceof Error ? error.message : "Unknown error"
       });
     }

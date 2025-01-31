@@ -5,6 +5,7 @@ import { db } from "@db";
 import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics, clusters, instances, healthCheckQueries, healthCheckExecutions, healthCheckResults, healthCheckReports } from "@db/schema";
 import { eq, and, ne, sql, desc, asc } from "drizzle-orm";
 import pkg from 'pg';
+import { z } from "zod";
 const { Client } = pkg;
 
 function requireAuth(req: Express.Request, res: Express.Response, next: Express.NextFunction) {
@@ -1773,6 +1774,50 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
+  // Add this endpoint for updating health check queries
+  app.patch("/api/health-check-queries/:id", requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const updateData = req.body;
+
+      // Validate request body
+      const schema = z.object({
+        title: z.string().min(1),
+        query: z.string().min(1),
+        runOnAllInstances: z.boolean(),
+        active: z.boolean(),
+      });
+
+      const validatedData = schema.parse(updateData);
+
+      const [updatedQuery] = await db
+        .update(healthCheckQueries)
+        .set(validatedData)
+        .where(eq(healthCheckQueries.id, parseInt(id)))
+        .returning();
+
+      if (!updatedQuery) {
+        return res.status(404).json({ error: "Query not found" });
+      }
+
+      res.json(updatedQuery);
+    } catch (error) {
+      console.error("Query update error:", error);
+      
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          error: "Validation error",
+          details: error.errors,
+        });
+      }
+      
+      res.status(500).json({ 
+        error: "Failed to update query",
+        details: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  });
+
   // Add cluster health check execution endpoint from edited snippet
   app.post("/api/health-check-executions", requireAuth, async (req, res) => {
     try {
@@ -2197,6 +2242,35 @@ export function registerRoutes(app: Express): Server {
         error: "Error deleting cluster",
         details: error instanceof Error ? error.message : String(error)
       });
+    }
+  });
+
+  // Add this endpoint to handle reordering
+  app.post("/api/health-check-queries/reorder", requireAuth, async (req, res) => {
+    try {
+      const { queries } = req.body;
+      
+      if (!Array.isArray(queries)) {
+        return res.status(400).json({ error: "Invalid request format" });
+      }
+
+      const transaction = await db.transaction(async (tx) => {
+        const updatedQueries = [];
+        for (const q of queries) {
+          const [updated] = await tx
+            .update(healthCheckQueries)
+            .set({ displayOrder: q.displayOrder })
+            .where(eq(healthCheckQueries.id, q.id))
+            .returning();
+          updatedQueries.push(updated);
+        }
+        return updatedQueries;
+      });
+
+      res.json(transaction);
+    } catch (error) {
+      console.error("Reorder error:", error);
+      res.status(500).json({ error: "Failed to reorder queries" });
     }
   });
 

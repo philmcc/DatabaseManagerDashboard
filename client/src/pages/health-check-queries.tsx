@@ -32,7 +32,7 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import BaseLayout from "@/components/layout/base-layout";
-import { DragDropContext, Droppable, Draggable } from "react-beautiful-dnd";
+import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 
 const querySchema = z.object({
   title: z.string().min(1, "Title is required"),
@@ -177,13 +177,18 @@ export default function HealthCheckQueries() {
 
   // Reorder mutation
   const reorderMutation = useMutation({
-    mutationFn: async (queries: { id: number, displayOrder: number }[]) => {
+    mutationFn: async (queries: { id: number; displayOrder: number }[]) => {
       const response = await fetch('/api/health-check-queries/reorder', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ queries }),
       });
-      if (!response.ok) throw new Error('Failed to reorder queries');
+      
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(error);
+      }
+      
       return response.json();
     },
     onSuccess: () => {
@@ -381,28 +386,43 @@ export default function HealthCheckQueries() {
             <DragDropContext onDragEnd={handleDragEnd}>
               <Droppable droppableId="queries">
                 {(provided) => (
-                  <div {...provided.droppableProps} ref={provided.innerRef}>
-                    <Accordion type="single" collapsible>
+                  <div 
+                    {...provided.droppableProps} 
+                    ref={provided.innerRef}
+                    className="min-h-[500px] relative"
+                  >
+                    <Accordion type="single" collapsible className="space-y-2">
                       {queries.map((query, index) => (
                         <Draggable
                           key={query.id}
                           draggableId={query.id.toString()}
                           index={index}
                         >
-                          {(provided) => (
+                          {(provided, snapshot) => (
                             <div
                               ref={provided.innerRef}
                               {...provided.draggableProps}
+                              style={{
+                                ...provided.draggableProps.style,
+                                touchAction: 'none',
+                              }}
+                              className={`bg-background rounded-lg shadow-sm hover:shadow-md transition-shadow ${
+                                snapshot.isDragging ? 'bg-accent/50 shadow-md ring-1 ring-primary' : ''
+                              }`}
                             >
-                              <AccordionItem value={query.id.toString()} className="border mb-2">
+                              <AccordionItem value={query.id.toString()} className="border">
                                 <div className="flex items-center">
                                   <div
                                     {...provided.dragHandleProps}
-                                    className="p-2 cursor-grab"
+                                    className="p-3 cursor-grab active:cursor-grabbing hover:bg-accent/50 rounded-l-lg self-stretch flex items-center z-10"
+                                    style={{ touchAction: 'none' }}
+                                    onClick={(e) => e.stopPropagation()}
                                   >
                                     <GripVertical className="h-5 w-5 text-muted-foreground" />
                                   </div>
-                                  <AccordionTrigger className="flex-1">
+                                  <AccordionTrigger 
+                                    className="flex-1 hover:no-underline px-4 min-h-[60px]"
+                                  >
                                     <div className="flex items-center justify-between w-full pr-4">
                                       <span>{query.title}</span>
                                       <div className="flex items-center gap-2">

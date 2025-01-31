@@ -8,7 +8,7 @@ export const userRoleEnum = pgEnum('user_role', ['ADMIN', 'WRITER', 'READER']);
 // Base tables
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
-  username: text("username").unique().notNull(),
+  username: text("username").notNull(),
   password: text("password").notNull(),
   resetToken: text("resetToken"),
   resetTokenExpiry: timestamp("resetTokenExpiry"),
@@ -29,12 +29,6 @@ export const userRelations = relations(users, ({ one }) => ({
     references: [users.id],
   }),
 }));
-
-// Create schemas and types
-export const insertUserSchema = createInsertSchema(users);
-export const selectUserSchema = createSelectSchema(users);
-export type InsertUser = typeof users.$inferInsert;
-export type SelectUser = typeof users.$inferSelect;
 
 export const clusters = pgTable("clusters", {
   id: serial("id").primaryKey(),
@@ -283,16 +277,6 @@ export const insertHealthCheckResultSchema = createInsertSchema(healthCheckResul
 export const selectHealthCheckResultSchema = createSelectSchema(healthCheckResults);
 export const insertHealthCheckReportSchema = createInsertSchema(healthCheckReports);
 export const selectHealthCheckReportSchema = createSelectSchema(healthCheckReports);
-
-// Export types for all health check tables
-export type InsertHealthCheckQuery = typeof healthCheckQueries.$inferInsert;
-export type SelectHealthCheckQuery = typeof healthCheckQueries.$inferSelect;
-export type InsertHealthCheckExecution = typeof healthCheckExecutions.$inferInsert;
-export type SelectHealthCheckExecution = typeof healthCheckExecutions.$inferSelect;
-export type InsertHealthCheckResult = typeof healthCheckResults.$inferInsert;
-export type SelectHealthCheckResult = typeof healthCheckResults.$inferSelect;
-export type InsertHealthCheckReport = typeof healthCheckReports.$inferInsert;
-export type SelectHealthCheckReport = typeof healthCheckReports.$inferSelect;
 
 // Schema validation
 export const insertTagSchema = createInsertSchema(tags);

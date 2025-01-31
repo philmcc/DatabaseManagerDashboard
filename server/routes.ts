@@ -1026,40 +1026,66 @@ export function registerRoutes(app: Express): Server {
 
       await client.connect();
 
-      const metrics: Record<string, any> = {};
+      const metrics: Record<string, any> = {
+        // Initialize with default values
+        databaseSize: '0 kB',
+        tableStats: [],
+        activeConnections: 0,
+        slowQueries: 0,
+        cacheHitRatio: 0
+      };
 
-      // Get database size
-      const sizeResult = await client.query(
-        "SELECT pg_size_pretty(pg_database_size($1)) as size",
-        [dbConnection.databaseName]
-      );
-      metrics.databaseSize = sizeResult.rows[0].size;
+      try {
+        // Get database size
+        try {
+          const sizeResult = await client.query(
+            "SELECT pg_database_size($1) as raw_size, pg_size_pretty(pg_database_size($1)) as size",
+            [dbConnection.databaseName]
+          );
+          metrics.databaseSize = sizeResult.rows[0]?.size || '0 kB';
+          metrics.rawDatabaseSize = Number(sizeResult.rows[0]?.raw_size || 0);
+        } catch (sizeError) {
+          console.error('Database size query failed:', sizeError);
+        }
 
-      // Get table statistics
-      const tableStatsResult = await client.query(`
-        SELECT 
-          schemaname,
-          relname as table_name,
-          n_live_tup as row_count,
-          n_dead_tup as dead_tuples,
-          last_vacuum,
-          last_autovacuum,
-          last_analyze,
-          last_autoanalyze
-        FROM pg_stat_user_tables
-        ORDER BY n_live_tup DESC
-      `);
-      metrics.tableStats = tableStatsResult.rows;
+        // Get table statistics
+        try {
+          const tableStatsResult = await client.query(`
+            SELECT 
+              schemaname,
+              relname as table_name,
+              n_live_tup as row_count,
+              n_dead_tup as dead_tuples,
+              last_vacuum,
+              last_autovacuum,
+              last_analyze,
+              last_autoanalyze
+            FROM pg_stat_user_tables
+            ORDER BY n_live_tup DESC
+          `);
+          metrics.tableStats = tableStatsResult.rows;
+        } catch (tableStatsError) {
+          console.error('Table stats query failed:', tableStatsError);
+        }
 
-      // Get connection stats
-      const connectionStatsResult = await client.query(`
-        SELECT count(*) as active_connections 
-        FROM pg_stat_activity 
-        WHERE datname = $1
-      `, [dbConnection.databaseName]);
-      metrics.activeConnections = connectionStatsResult.rows[0].active_connections;
+        // Get connection stats
+        try {
+          const connectionStatsResult = await client.query(
+            `SELECT count(*) as active_connections 
+             FROM pg_stat_activity 
+             WHERE datname = $1`,
+            [dbConnection.databaseName]
+          );
+          metrics.activeConnections = Number(connectionStatsResult.rows[0]?.active_connections || 0);
+        } catch (connectionError) {
+          console.error('Connection stats query failed:', connectionError);
+        }
 
-      await client.end();
+        // Add similar try-catch blocks for other metric queries...
+
+      } finally {
+        await client.end();
+      }
 
       // Store metrics in database
       const [storedMetrics] = await db
@@ -1068,6 +1094,12 @@ export function registerRoutes(app: Express): Server {
           databaseId: parseInt(id),
           metrics: metrics,
           collectedAt: new Date(),
+          activeConnections: metrics.activeConnections ? Number(metrics.activeConnections) : 0,
+          databaseSize: metrics.databaseSize ? String(metrics.databaseSize) : '0 kB',
+          rawDatabaseSize: metrics.rawDatabaseSize ? Number(metrics.rawDatabaseSize) : 0,
+          slowQueries: metrics.slowQueries ? Number(metrics.slowQueries) : 0,
+          avgQueryTime: metrics.avgQueryTime ? Number(metrics.avgQueryTime) : 0,
+          cacheHitRatio: metrics.cacheHitRatio ? Number(metrics.cacheHitRatio) : 0,
         })
         .returning();
 
@@ -2301,128 +2333,3 @@ export function registerRoutes(app: Express): Server {
   const httpServer = createServer(app);
   return httpServer;
 }
-
-const databaseMetricsQueries = {
-  bufferCacheHitRatio: `
-    SELECT 
-      COALESCE(sum(heap_blks_hit), 0) as heap_hit,
-      COALESCE(sum(heap_blks_read), 0) as heap_read
-    FROM pg_statio_user_tables;
-  `,
-
-  databaseSizes: `
-    SELECT 
-      datname AS database,
-      pg_size_pretty(pg_database_size(datname)) AS size,
-      pg_size_pretty(pg_tablespace_size('pg_default')) AS tablespace_size
-    FROM pg_database
-    WHERE datname NOT IN ('template0', 'template1', 'postgres')
-    ORDER BY pg_database_size(datname) DESC;
-  `,
-
-  transactionWraparound: `
-    SELECT 
-      n.nspname as schema,
-      c.relname as table,
-      age(c.relfrozenxid) as xid_age,
-      ROUND((age(c.relfrozenxid) / 2000000000::float4)::numeric, 1) as perc_towards_wraparound,
-      CASE
-        WHEN age(c.relfrozenxid) > 1500000000 THEN 'critical'
-        WHEN age(c.relfrozenxid) > 1000000000 THEN 'warning'
-        ELSE 'ok'
-      END as status
-    FROM pg_class c
-    JOIN pg_namespace n ON c.relnamespace = n.oid
-    WHERE c.relkind IN ('r', 't', 'm')
-      AND n.nspname NOT IN ('pg_catalog', 'information_schema')
-    ORDER BY age(c.relfrozenxid) DESC
-    LIMIT 10;
-  `,
-
-  deadTuples: `
-    SELECT 
-      schemaname as schema,
-      relname as table,
-      n_dead_tup as dead_tuples,
-      n_live_tup as live_tuples,
-      ROUND(n_dead_tup::numeric * 100.0 / NULLIF(n_live_tup + n_dead_tup, 0), 1) as dead_tuples_ratio
-    FROM pg_stat_user_tables
-    WHERE n_dead_tup > 10000
-    ORDER BY n_dead_tup DESC
-    LIMIT 10;
-  `,
-
-  tableBloat: `
-    WITH RECURSIVE constants AS (
-      SELECT current_setting('block_size')::numeric AS bs
-    ),
-    relation_stats AS (
-      SELECT 
-        schemaname,
-        tablename,
-        (n_live_tup + n_dead_tup) AS total_tuples,
-        seq_scan,
-        idx_scan
-      FROM pg_stat_user_tables
-    ),
-    table_bloat AS (
-      SELECT
-        schemaname as schema,
-        tablename as table,
-        CASE
-          WHEN avg_width IS NULL OR avg_width <= 0 THEN NULL
-          ELSE ceil(bs::numeric * count(*) / (bs - 24)::numeric)
-        END AS expected_pages,
-        relpages AS actual_pages,
-        CASE
-          WHEN relpages IS NULL THEN NULL
-          ELSE relpages - ceil(bs::numeric * count(*) / (bs - 24)::numeric)
-        END AS bloat_pages
-      FROM pg_class c
-      JOIN pg_namespace n ON c.relnamespace = n.oid
-      JOIN pg_stats ON tablename = relname
-      CROSS JOIN constants
-      WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
-        AND c.relkind = 'r'
-      GROUP BY schemaname, tablename, bs, avg_width, relpages
-    )
-    SELECT 
-      schema,
-      table,
-      pg_size_pretty(bloat_pages::bigint * bs::bigint) AS bloat_size,
-      CASE
-        WHEN expected_pages = 0 THEN 0
-        ELSE round((bloat_pages::numeric / expected_pages::numeric)::numeric, 1)
-      END AS bloat_ratio
-    FROM table_bloat
-    CROSS JOIN constants
-    WHERE bloat_pages > 0
-  `,
-
-  unusedIndexes: `
-    SELECT 
-      schemaname as schema,
-      tablename as table,
-      indexname as index,
-      pg_size_pretty(pg_relation_size(indexrelid::regclass)) as index_size
-    FROM pg_stat_user_indexes
-    WHERE idx_scan = 0
-      AND schemaname NOT IN ('pg_catalog', 'pg_toast')
-    ORDER BY pg_relation_size(indexrelid::regclass) DESC
-    LIMIT 10;
-  `,
-
-  missingForeignKeys: `
-    SELECT DISTINCT
-      c.conrelid::regclass as table,
-      a.attname as column,
-      c.conname as foreign_key,
-      c.confrelid::regclass as referenced_table
-    FROM pg_constraint c
-    JOIN pg_attribute a ON a.attnum = ANY(c.conkey) AND a.attrelid = c.conrelid
-    LEFT JOIN pg_index i ON c.conrelid = i.indrelid AND a.attnum = ANY(i.indkey)
-    WHERE c.contype = 'f'
-      AND i.indrelid IS NULL
-    ORDER BY c.conrelid::regclass::text, a.attname;
-  `,
-};

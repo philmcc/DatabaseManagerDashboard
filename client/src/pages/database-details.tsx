@@ -9,7 +9,6 @@ import { useToast } from "@/hooks/use-toast";
 import { SelectDatabaseConnection, SelectDatabaseOperationLog } from "@db/schema";
 import { useState } from "react";
 import { format } from "date-fns";
-import MetricsDashboard from "@/components/database/metrics-dashboard";
 
 interface LogDetails {
   before?: Record<string, any>;
@@ -240,8 +239,6 @@ export default function DatabaseDetails() {
             </div>
           </CardContent>
         </Card>
-
-        <MetricsDashboard databaseId={parseInt(id)} />
 
         <Card>
           <CardHeader>

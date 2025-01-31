@@ -144,13 +144,29 @@ export default function HealthCheckQueries() {
   // Update query mutation
   const updateMutation = useMutation({
     mutationFn: async ({ id, data }: { id: number, data: z.infer<typeof querySchema> }) => {
+      console.log('Sending update request for query ID:', id, 'Data:', data);
+      
       const response = await fetch(`/api/health-check-queries/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
       });
-      if (!response.ok) throw new Error('Failed to update query');
-      return response.json();
+      
+      console.log('Response status:', response.status);
+      console.log('Response headers:', Object.fromEntries(response.headers.entries()));
+      
+      const contentType = response.headers.get('content-type');
+      if (!response.ok) {
+        const error = contentType?.includes('application/json') 
+          ? await response.json()
+          : await response.text();
+        console.error('Update error:', error);
+        throw new Error(error.message || error.error || 'Failed to update query');
+      }
+      
+      const responseData = await response.json();
+      console.log('Update successful:', responseData);
+      return responseData;
     },
     onMutate: () => {
       toast({

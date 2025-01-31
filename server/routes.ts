@@ -6,36 +6,39 @@ import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, 
 import { eq, and, ne, sql, desc, asc } from "drizzle-orm";
 import pkg from 'pg';
 import { z } from "zod";
+import express from 'express';
 const { Client } = pkg;
 
+// Update all authentication middleware functions
 function requireAuth(req: Express.Request, res: Express.Response, next: Express.NextFunction) {
   if (!req.isAuthenticated()) {
-    return res.status(401).send("Not authenticated");
+    return res.status(401).json({ error: "Not authenticated" });
   }
   next();
 }
 
 function requireAdmin(req: Express.Request, res: Express.Response, next: Express.NextFunction) {
   if (!req.isAuthenticated()) {
-    return res.status(401).send("Not authenticated");
+    return res.status(401).json({ error: "Not authenticated" });
   }
   if (req.user.role !== 'ADMIN') {
-    return res.status(403).send("Not authorized");
+    return res.status(403).json({ error: "Not authorized" });
   }
   next();
 }
 
 function requireWriterOrAdmin(req: Express.Request, res: Express.Response, next: Express.NextFunction) {
   if (!req.isAuthenticated()) {
-    return res.status(401).send("Not authenticated");
+    return res.status(401).json({ error: "Not authenticated" });
   }
   if (req.user.role !== 'ADMIN' && req.user.role !== 'WRITER') {
-    return res.status(403).send("Not authorized");
+    return res.status(403).json({ error: "Not authorized" });
   }
   next();
 }
 
 export function registerRoutes(app: Express): Server {
+  app.use(express.json());
   setupAuth(app);
 
   // Add user management routes
@@ -1777,6 +1780,12 @@ export function registerRoutes(app: Express): Server {
   // Add this endpoint for updating health check queries
   app.patch("/api/health-check-queries/:id", requireAuth, async (req, res) => {
     try {
+      console.log('Update request received:', {
+        params: req.params,
+        body: req.body,
+        user: req.user
+      });
+
       const { id } = req.params;
       const updateData = req.body;
 
@@ -1788,8 +1797,11 @@ export function registerRoutes(app: Express): Server {
         active: z.boolean(),
       });
 
+      console.log('Validating request body');
       const validatedData = schema.parse(updateData);
+      console.log('Validation passed:', validatedData);
 
+      console.log('Updating database record');
       const [updatedQuery] = await db
         .update(healthCheckQueries)
         .set(validatedData)
@@ -1797,14 +1809,17 @@ export function registerRoutes(app: Express): Server {
         .returning();
 
       if (!updatedQuery) {
+        console.log('Query not found for ID:', id);
         return res.status(404).json({ error: "Query not found" });
       }
 
+      console.log('Update successful:', updatedQuery);
       res.json(updatedQuery);
     } catch (error) {
       console.error("Query update error:", error);
       
       if (error instanceof z.ZodError) {
+        console.log('Validation errors:', error.errors);
         return res.status(400).json({
           error: "Validation error",
           details: error.errors,
@@ -2272,6 +2287,15 @@ export function registerRoutes(app: Express): Server {
       console.error("Reorder error:", error);
       res.status(500).json({ error: "Failed to reorder queries" });
     }
+  });
+
+  // Add error handling middleware at the end
+  app.use((err: Error, req: Express.Request, res: Express.Response, next: Express.NextFunction) => {
+    console.error('Global error handler:', err);
+    res.status(500).json({ 
+      error: "Internal server error",
+      message: err.message 
+    });
   });
 
   const httpServer = createServer(app);

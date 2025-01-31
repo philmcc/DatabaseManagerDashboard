@@ -8,7 +8,7 @@ export const userRoleEnum = pgEnum('user_role', ['ADMIN', 'WRITER', 'READER']);
 // Base tables
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
-  username: text("username").notNull(),
+  username: text("username").unique().notNull(),
   password: text("password").notNull(),
   resetToken: text("resetToken"),
   resetTokenExpiry: timestamp("resetTokenExpiry"),
@@ -29,6 +29,12 @@ export const userRelations = relations(users, ({ one }) => ({
     references: [users.id],
   }),
 }));
+
+// Create schemas and types
+export const insertUserSchema = createInsertSchema(users);
+export const selectUserSchema = createSelectSchema(users);
+export type InsertUser = typeof users.$inferInsert;
+export type SelectUser = typeof users.$inferSelect;
 
 export const clusters = pgTable("clusters", {
   id: serial("id").primaryKey(),
@@ -151,9 +157,10 @@ export const databaseMetrics = pgTable("database_metrics", {
   timestamp: timestamp("timestamp").defaultNow(),
   activeConnections: integer("active_connections").notNull().default(0),
   databaseSize: text("database_size").notNull().default('0 kB'),
+  rawDatabaseSize: numeric("raw_database_size").notNull().default('0'),
   slowQueries: integer("slow_queries").notNull().default(0),
-  avgQueryTime: numeric("avg_query_time").notNull().default('0'),
-  cacheHitRatio: numeric("cache_hit_ratio").notNull().default('0'),
+  avgQueryTime: numeric("avg_query_time").notNull().default(0),
+  cacheHitRatio: numeric("cache_hit_ratio").notNull().default(0),
   metrics: json("metrics").notNull(),
 });
 
@@ -277,6 +284,16 @@ export const insertHealthCheckResultSchema = createInsertSchema(healthCheckResul
 export const selectHealthCheckResultSchema = createSelectSchema(healthCheckResults);
 export const insertHealthCheckReportSchema = createInsertSchema(healthCheckReports);
 export const selectHealthCheckReportSchema = createSelectSchema(healthCheckReports);
+
+// Export types for all health check tables
+export type InsertHealthCheckQuery = typeof healthCheckQueries.$inferInsert;
+export type SelectHealthCheckQuery = typeof healthCheckQueries.$inferSelect;
+export type InsertHealthCheckExecution = typeof healthCheckExecutions.$inferInsert;
+export type SelectHealthCheckExecution = typeof healthCheckExecutions.$inferSelect;
+export type InsertHealthCheckResult = typeof healthCheckResults.$inferInsert;
+export type SelectHealthCheckResult = typeof healthCheckResults.$inferSelect;
+export type InsertHealthCheckReport = typeof healthCheckReports.$inferInsert;
+export type SelectHealthCheckReport = typeof healthCheckReports.$inferSelect;
 
 // Schema validation
 export const insertTagSchema = createInsertSchema(tags);

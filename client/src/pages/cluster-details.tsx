@@ -1,10 +1,12 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useParams, Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, PlusCircle } from "lucide-react";
 import type { SelectCluster, SelectInstance } from "@db/schema";
 import Navbar from "@/components/layout/navbar";
+import { useToast } from "@/hooks/use-toast";
+import { useMutation } from "@tanstack/react-query";
 
 interface ClusterResponse extends SelectCluster {
   instances: SelectInstance[];
@@ -13,10 +15,37 @@ interface ClusterResponse extends SelectCluster {
 function ClusterDetails() {
   const [location, navigate] = useLocation();
   const params = useParams<{ id: string }>();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const { data: cluster, isLoading } = useQuery<ClusterResponse>({
     queryKey: [`/api/clusters/${params.id}`],
     enabled: !!params.id,
+  });
+
+  const { mutate: deleteCluster } = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/clusters/${params.id}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+
+      if (!res.ok) {
+        const error = await res.text();
+        throw new Error(error);
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/clusters'] });
+      window.location.href = '/clusters';
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Deletion failed",
+        description: error.message,
+      });
+    },
   });
 
   if (isLoading) {
@@ -63,6 +92,17 @@ function ClusterDetails() {
             </Button>
             <Button onClick={() => navigate(`/clusters/${params.id}/edit`)}>
               Edit Cluster
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (confirm("Are you sure you want to delete this cluster? All associated instances must be deleted first.")) {
+                  deleteCluster();
+                }
+              }}
+              className="ml-2"
+            >
+              Delete Cluster
             </Button>
           </div>
         </div>

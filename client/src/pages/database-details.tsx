@@ -92,6 +92,54 @@ export default function DatabaseDetails() {
     },
   });
 
+  const { mutate: deleteDatabase } = useMutation({
+    mutationFn: async () => {
+      console.log('Initiating database deletion for ID:', id);
+      try {
+        const res = await fetch(`/api/databases/${id}`, {
+          method: 'DELETE',
+          credentials: 'include',
+        });
+        
+        console.log('Delete response status:', res.status);
+        
+        if (!res.ok) {
+          const errorText = await res.text();
+          console.error('Delete failed with response:', errorText);
+          throw new Error(errorText || 'Failed to delete database');
+        }
+        
+        return res;
+      } catch (error) {
+        console.error('Delete request failed:', error);
+        throw error;
+      }
+    },
+    onSuccess: () => {
+      console.log('Delete successful, invalidating queries');
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['/api/databases'] }),
+        queryClient.invalidateQueries({ 
+          predicate: (query) => query.queryKey[0].toString().includes('/api/database-logs')
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ['/api/instances']
+        })
+      ]).then(() => {
+        console.log('Query invalidation complete, redirecting');
+        window.location.href = '/dashboard';
+      });
+    },
+    onError: (error: Error) => {
+      console.error('Delete mutation error:', error);
+      toast({
+        variant: "destructive",
+        title: "Deletion failed",
+        description: error.message,
+      });
+    },
+  });
+
   if (isLoadingDatabase) {
     return (
       <BaseLayout>
@@ -178,6 +226,16 @@ export default function DatabaseDetails() {
                 onClick={() => window.location.href = `/databases/${id}/edit`}
               >
                 Edit Database
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  if (confirm("Are you sure you want to delete this database? This action cannot be undone.")) {
+                    deleteDatabase();
+                  }
+                }}
+              >
+                Delete Database
               </Button>
             </div>
           </CardContent>

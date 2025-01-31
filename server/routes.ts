@@ -1026,40 +1026,66 @@ export function registerRoutes(app: Express): Server {
 
       await client.connect();
 
-      const metrics: Record<string, any> = {};
+      const metrics: Record<string, any> = {
+        // Initialize with default values
+        databaseSize: '0 kB',
+        tableStats: [],
+        activeConnections: 0,
+        slowQueries: 0,
+        cacheHitRatio: 0
+      };
 
-      // Get database size
-      const sizeResult = await client.query(
-        "SELECT pg_size_pretty(pg_database_size($1)) as size",
-        [dbConnection.databaseName]
-      );
-      metrics.databaseSize = sizeResult.rows[0].size;
+      try {
+        // Get database size
+        try {
+          const sizeResult = await client.query(
+            "SELECT pg_database_size($1) as raw_size, pg_size_pretty(pg_database_size($1)) as size",
+            [dbConnection.databaseName]
+          );
+          metrics.databaseSize = sizeResult.rows[0]?.size || '0 kB';
+          metrics.rawDatabaseSize = Number(sizeResult.rows[0]?.raw_size || 0);
+        } catch (sizeError) {
+          console.error('Database size query failed:', sizeError);
+        }
 
-      // Get table statistics
-      const tableStatsResult = await client.query(`
-        SELECT 
-          schemaname,
-          relname as table_name,
-          n_live_tup as row_count,
-          n_dead_tup as dead_tuples,
-          last_vacuum,
-          last_autovacuum,
-          last_analyze,
-          last_autoanalyze
-        FROM pg_stat_user_tables
-        ORDER BY n_live_tup DESC
-      `);
-      metrics.tableStats = tableStatsResult.rows;
+        // Get table statistics
+        try {
+          const tableStatsResult = await client.query(`
+            SELECT 
+              schemaname,
+              relname as table_name,
+              n_live_tup as row_count,
+              n_dead_tup as dead_tuples,
+              last_vacuum,
+              last_autovacuum,
+              last_analyze,
+              last_autoanalyze
+            FROM pg_stat_user_tables
+            ORDER BY n_live_tup DESC
+          `);
+          metrics.tableStats = tableStatsResult.rows;
+        } catch (tableStatsError) {
+          console.error('Table stats query failed:', tableStatsError);
+        }
 
-      // Get connection stats
-      const connectionStatsResult = await client.query(`
-        SELECT count(*) as active_connections 
-        FROM pg_stat_activity 
-        WHERE datname = $1
-      `, [dbConnection.databaseName]);
-      metrics.activeConnections = connectionStatsResult.rows[0].active_connections;
+        // Get connection stats
+        try {
+          const connectionStatsResult = await client.query(
+            `SELECT count(*) as active_connections 
+             FROM pg_stat_activity 
+             WHERE datname = $1`,
+            [dbConnection.databaseName]
+          );
+          metrics.activeConnections = Number(connectionStatsResult.rows[0]?.active_connections || 0);
+        } catch (connectionError) {
+          console.error('Connection stats query failed:', connectionError);
+        }
 
-      await client.end();
+        // Add similar try-catch blocks for other metric queries...
+
+      } finally {
+        await client.end();
+      }
 
       // Store metrics in database
       const [storedMetrics] = await db
@@ -1068,6 +1094,12 @@ export function registerRoutes(app: Express): Server {
           databaseId: parseInt(id),
           metrics: metrics,
           collectedAt: new Date(),
+          activeConnections: metrics.activeConnections ? Number(metrics.activeConnections) : 0,
+          databaseSize: metrics.databaseSize ? String(metrics.databaseSize) : '0 kB',
+          rawDatabaseSize: metrics.rawDatabaseSize ? Number(metrics.rawDatabaseSize) : 0,
+          slowQueries: metrics.slowQueries ? Number(metrics.slowQueries) : 0,
+          avgQueryTime: metrics.avgQueryTime ? Number(metrics.avgQueryTime) : 0,
+          cacheHitRatio: metrics.cacheHitRatio ? Number(metrics.cacheHitRatio) : 0,
         })
         .returning();
 

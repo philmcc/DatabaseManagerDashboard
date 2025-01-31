@@ -157,10 +157,9 @@ export const databaseMetrics = pgTable("database_metrics", {
   timestamp: timestamp("timestamp").defaultNow(),
   activeConnections: integer("active_connections").notNull().default(0),
   databaseSize: text("database_size").notNull().default('0 kB'),
-  rawDatabaseSize: numeric("raw_database_size").notNull().default('0'),
   slowQueries: integer("slow_queries").notNull().default(0),
-  avgQueryTime: numeric("avg_query_time").notNull().default(0),
-  cacheHitRatio: numeric("cache_hit_ratio").notNull().default(0),
+  avgQueryTime: numeric("avg_query_time").notNull().default('0'),
+  cacheHitRatio: numeric("cache_hit_ratio").notNull().default('0'),
   metrics: json("metrics").notNull(),
 });
 

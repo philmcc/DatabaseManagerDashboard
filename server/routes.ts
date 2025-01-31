@@ -5,36 +5,40 @@ import { db } from "@db";
 import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics, clusters, instances, healthCheckQueries, healthCheckExecutions, healthCheckResults, healthCheckReports } from "@db/schema";
 import { eq, and, ne, sql, desc, asc } from "drizzle-orm";
 import pkg from 'pg';
+import { z } from "zod";
+import express from 'express';
 const { Client } = pkg;
 
+// Update all authentication middleware functions
 function requireAuth(req: Express.Request, res: Express.Response, next: Express.NextFunction) {
   if (!req.isAuthenticated()) {
-    return res.status(401).send("Not authenticated");
+    return res.status(401).json({ error: "Not authenticated" });
   }
   next();
 }
 
 function requireAdmin(req: Express.Request, res: Express.Response, next: Express.NextFunction) {
   if (!req.isAuthenticated()) {
-    return res.status(401).send("Not authenticated");
+    return res.status(401).json({ error: "Not authenticated" });
   }
   if (req.user.role !== 'ADMIN') {
-    return res.status(403).send("Not authorized");
+    return res.status(403).json({ error: "Not authorized" });
   }
   next();
 }
 
 function requireWriterOrAdmin(req: Express.Request, res: Express.Response, next: Express.NextFunction) {
   if (!req.isAuthenticated()) {
-    return res.status(401).send("Not authenticated");
+    return res.status(401).json({ error: "Not authenticated" });
   }
   if (req.user.role !== 'ADMIN' && req.user.role !== 'WRITER') {
-    return res.status(403).send("Not authorized");
+    return res.status(403).json({ error: "Not authorized" });
   }
   next();
 }
 
 export function registerRoutes(app: Express): Server {
+  app.use(express.json());
   setupAuth(app);
 
   // Add user management routes
@@ -1773,6 +1777,62 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
+  // Add this endpoint for updating health check queries
+  app.patch("/api/health-check-queries/:id", requireAuth, async (req, res) => {
+    try {
+      console.log('Update request received:', {
+        params: req.params,
+        body: req.body,
+        user: req.user
+      });
+
+      const { id } = req.params;
+      const updateData = req.body;
+
+      // Validate request body
+      const schema = z.object({
+        title: z.string().min(1),
+        query: z.string().min(1),
+        runOnAllInstances: z.boolean(),
+        active: z.boolean(),
+      });
+
+      console.log('Validating request body');
+      const validatedData = schema.parse(updateData);
+      console.log('Validation passed:', validatedData);
+
+      console.log('Updating database record');
+      const [updatedQuery] = await db
+        .update(healthCheckQueries)
+        .set(validatedData)
+        .where(eq(healthCheckQueries.id, parseInt(id)))
+        .returning();
+
+      if (!updatedQuery) {
+        console.log('Query not found for ID:', id);
+        return res.status(404).json({ error: "Query not found" });
+      }
+
+      console.log('Update successful:', updatedQuery);
+      res.json(updatedQuery);
+    } catch (error) {
+      console.error("Query update error:", error);
+      
+      if (error instanceof z.ZodError) {
+        console.log('Validation errors:', error.errors);
+        return res.status(400).json({
+          error: "Validation error",
+          details: error.errors,
+        });
+      }
+      
+      res.status(500).json({ 
+        error: "Failed to update query",
+        details: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  });
+
   // Add cluster health check execution endpoint from edited snippet
   app.post("/api/health-check-executions", requireAuth, async (req, res) => {
     try {
@@ -2198,6 +2258,44 @@ export function registerRoutes(app: Express): Server {
         details: error instanceof Error ? error.message : String(error)
       });
     }
+  });
+
+  // Add this endpoint to handle reordering
+  app.post("/api/health-check-queries/reorder", requireAuth, async (req, res) => {
+    try {
+      const { queries } = req.body;
+      
+      if (!Array.isArray(queries)) {
+        return res.status(400).json({ error: "Invalid request format" });
+      }
+
+      const transaction = await db.transaction(async (tx) => {
+        const updatedQueries = [];
+        for (const q of queries) {
+          const [updated] = await tx
+            .update(healthCheckQueries)
+            .set({ displayOrder: q.displayOrder })
+            .where(eq(healthCheckQueries.id, q.id))
+            .returning();
+          updatedQueries.push(updated);
+        }
+        return updatedQueries;
+      });
+
+      res.json(transaction);
+    } catch (error) {
+      console.error("Reorder error:", error);
+      res.status(500).json({ error: "Failed to reorder queries" });
+    }
+  });
+
+  // Add error handling middleware at the end
+  app.use((err: Error, req: Express.Request, res: Express.Response, next: Express.NextFunction) => {
+    console.error('Global error handler:', err);
+    res.status(500).json({ 
+      error: "Internal server error",
+      message: err.message 
+    });
   });
 
   const httpServer = createServer(app);

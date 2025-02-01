@@ -59,24 +59,23 @@ export default function ClusterForm() {
   }, [existingCluster, form]);
 
   const mutation = useMutation({
-    mutationFn: async (values: ClusterFormValues) => {
-      const response = await fetch(
-        isEditing ? `/api/clusters/${params.id}` : "/api/clusters",
-        {
-          method: isEditing ? "PATCH" : "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(values),
-          credentials: "include",
-        }
-      );
+    mutationFn: async (data: ClusterFormValues) => {
+      const res = await fetch(isEditing ? `/api/clusters/${params.id}` : "/api/clusters", {
+        method: isEditing ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+        credentials: "include",
+      });
 
-      if (!response.ok) {
-        throw new Error(await response.text());
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          throw new Error("You don't have permission to manage clusters. Writer or Admin access is required.");
+        }
+        const error = await res.text();
+        throw new Error(error);
       }
 
-      return response.json();
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/clusters"] });

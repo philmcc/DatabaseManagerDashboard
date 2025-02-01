@@ -114,24 +114,25 @@ function InstanceForm() {
   });
 
   const mutation = useMutation({
-    mutationFn: async (values: FormData) => {
-      const endpoint = params.id && params.id !== 'new'
-        ? `/api/instances/${params.id}`
-        : `/api/clusters/${params.clusterId}/instances`;
-
-      const response = await fetch(endpoint, {
+    mutationFn: async (data: FormData) => {
+      const res = await fetch(params.id && params.id !== 'new'
+        ? `/api/clusters/${params.clusterId}/instances/${params.id}`
+        : `/api/clusters/${params.clusterId}/instances`, {
         method: params.id && params.id !== 'new' ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(values),
+        body: JSON.stringify(data),
         credentials: "include",
       });
 
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text);
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          throw new Error("You don't have permission to manage instances. Writer or Admin access is required.");
+        }
+        const error = await res.text();
+        throw new Error(error);
       }
 
-      return response.json();
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/clusters/${params.clusterId}`] });

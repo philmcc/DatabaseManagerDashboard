@@ -6,13 +6,17 @@ import { Badge } from "@/components/ui/badge";
 import { PlusCircle, Loader2 } from "lucide-react";
 import type { SelectCluster } from "@db/schema";
 import Navbar from "@/components/layout/navbar";
+import { useUser } from "@/hooks/use-user";
 
 function ClustersPage() {
   const [location, navigate] = useLocation();
+  const { user } = useUser();
   const { data: clusters, isLoading } = useQuery({
     queryKey: ['/api/clusters'],
     queryFn: async ({ queryKey: [url] }) => {
-      const response = await fetch(url);
+      const response = await fetch(url, {
+        credentials: 'include'
+      });
       if (!response.ok) {
         throw new Error('Failed to fetch clusters');
       }
@@ -35,12 +39,14 @@ function ClustersPage() {
       <div className="container mx-auto py-6 space-y-6">
         <div className="flex justify-between items-center">
           <h1 className="text-3xl font-bold">Database Clusters</h1>
-          <Button asChild>
-            <Link href="/clusters/new">
-              <PlusCircle className="mr-2 h-4 w-4" />
-              New Cluster
-            </Link>
-          </Button>
+          {user?.role !== 'READER' && (
+            <Button asChild>
+              <Link href="/clusters/new">
+                <PlusCircle className="mr-2 h-4 w-4" />
+                New Cluster
+              </Link>
+            </Button>
+          )}
         </div>
 
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -65,7 +71,11 @@ function ClustersPage() {
             <Card className="col-span-full">
               <CardContent className="py-8">
                 <div className="text-center text-muted-foreground">
-                  <p>No clusters found. Create your first cluster to get started.</p>
+                  <p>
+                    {user?.role === 'READER' 
+                      ? "No clusters found."
+                      : "No clusters found. Create your first cluster to get started."}
+                  </p>
                 </div>
               </CardContent>
             </Card>

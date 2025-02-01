@@ -127,6 +127,9 @@ export default function DatabaseForm() {
       });
 
       if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          throw new Error("You don't have permission to create databases. Writer or Admin access is required.");
+        }
         const error = await res.text();
         throw new Error(error);
       }

@@ -111,8 +111,12 @@ export default function HealthCheckQueries() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
+        credentials: 'include',
       });
       if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          throw new Error("You don't have permission to perform this action. Writer or Admin access is required.");
+        }
         const error = await response.text();
         throw new Error(error || 'Failed to add query');
       }
@@ -212,6 +216,48 @@ export default function HealthCheckQueries() {
       toast({
         title: "Success",
         description: "Query order updated successfully",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Delete mutation
+  const deleteMutation = useMutation({
+    mutationFn: async (id: number) => {
+      console.log('Initiating delete for query ID:', id);
+      try {
+        const response = await fetch(`/api/health-check-queries/${id}`, {
+          method: 'DELETE',
+          credentials: 'include',
+        });
+        
+        console.log('Delete response status:', response.status);
+        const responseText = await response.text();
+        console.log('Raw response content:', responseText);
+
+        if (!response.ok) {
+          console.error(`Delete failed for query ${id}. Status: ${response.status}, Response: ${responseText}`);
+          throw new Error(responseText || 'Failed to delete query');
+        }
+
+        console.log('Delete successful for query ID:', id);
+        return JSON.parse(responseText);
+      } catch (error) {
+        console.error('Delete request failed:', error);
+        throw error;
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/health-check-queries'] });
+      toast({
+        title: "Success",
+        description: "Query deleted successfully",
       });
     },
     onError: (error: Error) => {
@@ -465,7 +511,7 @@ export default function HealthCheckQueries() {
                                     <pre className="bg-muted p-4 rounded-md overflow-x-auto">
                                       <code>{query.query}</code>
                                     </pre>
-                                    <div className="flex justify-end">
+                                    <div className="flex justify-end gap-2">
                                       <Button
                                         variant="outline"
                                         onClick={() => {
@@ -479,6 +525,17 @@ export default function HealthCheckQueries() {
                                         }}
                                       >
                                         Edit
+                                      </Button>
+                                      <Button
+                                        variant="destructive"
+                                        onClick={() => {
+                                          if (confirm("Are you sure you want to delete this query?")) {
+                                            deleteMutation.mutate(query.id);
+                                          }
+                                        }}
+                                        disabled={deleteMutation.isPending}
+                                      >
+                                        {deleteMutation.isPending ? "Deleting..." : "Delete"}
                                       </Button>
                                     </div>
                                   </div>

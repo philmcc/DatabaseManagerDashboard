@@ -28,13 +28,13 @@ function requireAdmin(req: Express.Request, res: Express.Response, next: Express
 }
 
 function requireWriterOrAdmin(req: Express.Request, res: Express.Response, next: Express.NextFunction) {
-  if (!req.isAuthenticated()) {
-    return res.status(401).json({ error: "Not authenticated" });
-  }
-  if (req.user.role !== 'ADMIN' && req.user.role !== 'WRITER') {
-    return res.status(403).json({ error: "Not authorized" });
-  }
-  next();
+  requireAuth(req, res, (err) => {
+    if (err) return next(err);
+    if (!['ADMIN', 'WRITER'].includes(req.user!.role)) {
+      return res.status(403).json({ error: "Requires writer or admin access" });
+    }
+    next();
+  });
 }
 
 export function registerRoutes(app: Express): Server {
@@ -2321,15 +2321,42 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  // Add error handling middleware at the end
-  app.use((err: Error, req: Express.Request, res: Express.Response, next: Express.NextFunction) => {
-    console.error('Global error handler:', err);
-    res.status(500).json({ 
-      error: "Internal server error",
-      message: err.message 
-    });
+  // Add this route with the other health check routes
+  app.delete("/api/health-check-queries/:id", requireWriterOrAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const queryId = parseInt(id);
+      
+      // Admin override check
+      const whereClause = req.user.role === 'ADMIN' 
+        ? eq(healthCheckQueries.id, queryId)
+        : and(
+            eq(healthCheckQueries.id, queryId),
+            eq(healthCheckQueries.userId, req.user.id)
+          );
+
+      const [query] = await db
+        .select()
+        .from(healthCheckQueries)
+        .where(whereClause);
+
+      if (!query) {
+        return res.status(404).json({ 
+          error: "Query not found or you don't have permission" 
+        });
+      }
+
+      const [deletedQuery] = await db
+        .delete(healthCheckQueries)
+        .where(eq(healthCheckQueries.id, queryId))
+        .returning();
+
+      res.status(200).json(deletedQuery);
+    } catch (error) {
+      console.error(`Error deleting query ${req.params.id}:`, error);
+      res.status(500).json({ error: "Internal server error" });
+    }
   });
 
-  const httpServer = createServer(app);
-  return httpServer;
+  return app;
 }

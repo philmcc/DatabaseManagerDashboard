@@ -21,6 +21,8 @@ export const users = pgTable("users", {
   approvedBy: integer("approved_by"),
   approvedAt: timestamp("approved_at"),
   updatedAt: timestamp("updatedAt").defaultNow(),
+  isAdmin: boolean("is_admin").default(false),
+  isWriter: boolean("is_writer").default(false),
 });
 
 export const userRelations = relations(users, ({ one }) => ({
@@ -189,6 +191,7 @@ export const healthCheckQueries = pgTable("health_check_queries", {
   title: text("title").notNull(),
   query: text("query").notNull(),
   runOnAllInstances: boolean("run_on_all_instances").default(false).notNull(),
+  runOnAllDatabases: boolean("run_on_all_databases").default(false).notNull(),
   active: boolean("active").default(true).notNull(),
   displayOrder: integer("display_order").notNull(),
   user_id: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -212,6 +215,7 @@ export const healthCheckResults = pgTable("health_check_results", {
   execution_id: integer("execution_id").notNull().references(() => healthCheckExecutions.id, { onDelete: 'cascade' }),
   query_id: integer("query_id").notNull().references(() => healthCheckQueries.id, { onDelete: 'cascade' }),
   instance_id: integer("instance_id").notNull().references(() => instances.id, { onDelete: 'cascade' }),
+  database_name: text("database_name"),
   results: jsonb("results"),
   error: text("error"),
   executedAt: timestamp("executed_at").defaultNow(),

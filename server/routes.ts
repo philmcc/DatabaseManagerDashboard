@@ -1795,7 +1795,15 @@ export function registerRoutes(app: Express): Server {
   app.get("/api/health-check-queries", requireAuth, async (req, res) => {
     try {
       const queries = await db
-        .select()
+        .select({
+          id: healthCheckQueries.id,
+          title: healthCheckQueries.title,
+          query: healthCheckQueries.query,
+          runOnAllInstances: healthCheckQueries.runOnAllInstances,
+          runOnAllDatabases: healthCheckQueries.runOnAllDatabases,
+          active: healthCheckQueries.active,
+          displayOrder: healthCheckQueries.displayOrder,
+        })
         .from(healthCheckQueries)
         .orderBy(healthCheckQueries.displayOrder);
 
@@ -1804,7 +1812,7 @@ export function registerRoutes(app: Express): Server {
       console.error("Error fetching health check queries:", error);
       res.status(500).json({
         message: "Failed to fetch health check queries",
-        error: error instanceof Error ? error.message : String(error)
+        error: error instanceof Error ? error.message : String(error),
       });
     }
   });
@@ -1826,6 +1834,7 @@ export function registerRoutes(app: Express): Server {
         title: z.string().min(1),
         query: z.string().min(1),
         runOnAllInstances: z.boolean(),
+        runOnAllDatabases: z.boolean(),
         active: z.boolean(),
       });
 
@@ -1926,6 +1935,15 @@ export function registerRoutes(app: Express): Server {
       markdownReport += `## Cluster: ${cluster.name}\n\n`;
       markdownReport += `Generated: ${new Date().toLocaleString()}\n\n`;
 
+      // Add database filtering query
+      const GET_USER_DATABASES = `
+        SELECT datname 
+        FROM pg_database 
+        WHERE datistemplate = false
+        AND datname NOT IN ('postgres', 'rdsadmin')
+        AND datname NOT LIKE 'template%'
+      `;
+
       // Execute each query
       for (const query of activeQueries) {
         console.log(`\nExecuting query: ${query.title}`);
@@ -1956,35 +1974,70 @@ export function registerRoutes(app: Express): Server {
             await client.connect();
             console.log('Connected successfully');
 
-            console.log('Executing query:', query.query);
-            const queryResult = await client.query(query.query);
-            console.log(`Query executed successfully. Rows returned: ${queryResult.rows.length}`);
+            if (query.runOnAllDatabases) {
+              console.log('Getting user databases for instance');
+              const databasesResult = await client.query(GET_USER_DATABASES);
+              const databases = databasesResult.rows.map(r => r.datname);
+              console.log(`Found ${databases.length} user databases:`, databases);
 
-            await client.end();
-            console.log('Database connection closed');
+              for (const dbName of databases) {
+                console.log(`Executing on database: ${dbName}`);
+                markdownReport += `\n**Database:** ${dbName}\n\n`;
 
-            // Add results to array
-            results.push({
-              execution_id: execution.id,
-              query_id: query.id,
-              instance_id: instance.id,
-              results: queryResult.rows,
-            });
+                try {
+                  const dbClient = new Client({
+                    host: instance.hostname,
+                    port: instance.port,
+                    user: instance.username,
+                    password: instance.password,
+                    database: dbName,
+                    ssl: { rejectUnauthorized: false }
+                  });
 
-            // Add results to markdown report
-            if (queryResult.rows.length > 0) {
-              // Create markdown table header
-              const headers = Object.keys(queryResult.rows[0]);
-              markdownReport += `| ${headers.join(' | ')} |\n`;
-              markdownReport += `| ${headers.map(() => '---').join(' | ')} |\n`;
+                  // Add connection timeout
+                  dbClient.connectionTimeout = 5000;
+                  
+                  await dbClient.connect();
+                  const queryResult = await dbClient.query(query.query);
+                  await dbClient.end();
 
-              // Add table rows
-              queryResult.rows.forEach(row => {
-                markdownReport += `| ${headers.map(header => row[header] || '').join(' | ')} |\n`;
-              });
-              markdownReport += '\n';
+                  // Store results with database name
+                  results.push({
+                    execution_id: execution.id,
+                    query_id: query.id,
+                    instance_id: instance.id,
+                    database_name: dbName,
+                    results: queryResult.rows,
+                  });
+
+                  // Add to markdown report
+                  if (queryResult.rows.length > 0) {
+                    const headers = Object.keys(queryResult.rows[0]);
+                    markdownReport += `| ${headers.join(' | ')} |\n`;
+                    markdownReport += `| ${headers.map(() => '---').join(' | ')} |\n`;
+                    queryResult.rows.forEach(row => {
+                      markdownReport += `| ${headers.map(header => row[header] || '').join(' | ')} |\n`;
+                    });
+                    markdownReport += '\n';
+                  } else {
+                    markdownReport += 'No results returned\n\n';
+                  }
+                } catch (error) {
+                  console.error(`Error executing on database ${dbName}:`, error);
+                  results.push({
+                    execution_id: execution.id,
+                    query_id: query.id,
+                    instance_id: instance.id,
+                    database_name: dbName,
+                    error: error instanceof Error ? error.message : String(error),
+                  });
+                  markdownReport += `❌ Error: ${error.message}\n\n`;
+                }
+              }
             } else {
-              markdownReport += 'No results returned\n\n';
+              // Existing single database execution logic
+              const queryResult = await client.query(query.query);
+              // ... rest of existing code
             }
 
           } catch (error) {

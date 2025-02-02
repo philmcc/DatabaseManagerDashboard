@@ -38,6 +38,7 @@ const querySchema = z.object({
   title: z.string().min(1, "Title is required"),
   query: z.string().min(1, "Query is required"),
   runOnAllInstances: z.boolean(),
+  runOnAllDatabases: z.boolean(),
   active: z.boolean(),
 });
 
@@ -46,6 +47,7 @@ type HealthCheckQuery = {
   title: string;
   query: string;
   runOnAllInstances: boolean;
+  runOnAllDatabases: boolean;
   active: boolean;
   displayOrder: number;
 };
@@ -275,6 +277,7 @@ export default function HealthCheckQueries() {
       title: "",
       query: "",
       runOnAllInstances: false,
+      runOnAllDatabases: false,
       active: true,
     },
   });
@@ -413,6 +416,22 @@ export default function HealthCheckQueries() {
                 />
                 <FormField
                   control={form.control}
+                  name="runOnAllDatabases"
+                  render={({ field }) => (
+                    <FormItem className="flex items-center gap-2">
+                      <FormControl>
+                        <Switch
+                          checked={field.value}
+                          onCheckedChange={field.onChange}
+                        />
+                      </FormControl>
+                      <FormLabel>Run on all databases</FormLabel>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
                   name="active"
                   render={({ field }) => (
                     <FormItem className="flex items-center gap-2">
@@ -520,6 +539,7 @@ export default function HealthCheckQueries() {
                                             title: query.title,
                                             query: query.query,
                                             runOnAllInstances: query.runOnAllInstances,
+                                            runOnAllDatabases: query.runOnAllDatabases,
                                             active: query.active,
                                           });
                                         }}

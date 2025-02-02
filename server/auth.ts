@@ -72,20 +72,30 @@ export function setupAuth(app: Express) {
   passport.use(
     new LocalStrategy(async (username, password, done) => {
       try {
-        const [user] = await db
-          .select()
+        const result = await db
+          .select({
+            id: users.id,
+            username: users.username,
+            password: users.password,
+            role: users.role,
+          })
           .from(users)
           .where(eq(users.username, username))
           .limit(1);
 
-        if (!user) {
+        if (!result.length) {
           return done(null, false, { message: "Incorrect username." });
         }
+        const user = result[0];
         const isMatch = await crypto.compare(password, user.password);
         if (!isMatch) {
           return done(null, false, { message: "Incorrect password." });
         }
-        return done(null, user);
+        return done(null, {
+          id: user.id,
+          username: user.username,
+          role: user.role,
+        });
       } catch (err) {
         return done(err);
       }
@@ -99,7 +109,12 @@ export function setupAuth(app: Express) {
   passport.deserializeUser(async (id: number, done) => {
     try {
       const [user] = await db
-        .select()
+        .select({
+          id: users.id,
+          username: users.username,
+          role: users.role,
+          isApproved: users.isApproved,
+        })
         .from(users)
         .where(eq(users.id, id))
         .limit(1);

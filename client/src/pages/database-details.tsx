@@ -460,37 +460,63 @@ export default function DatabaseDetails() {
                             No queries currently running
                           </p>
                         ) : (
-                          runningQueries.sort((a, b) => 
-                            durationToSeconds(b.duration) - durationToSeconds(a.duration)
-                          ).map((query, index) => (
-                            <div key={`${query.pid}-${index}`} className="border rounded-lg p-4">
-                              <div className="flex justify-between items-start mb-2">
-                                <div className="space-y-1">
-                                  <div className="flex items-center gap-2">
-                                    <Badge variant="outline">{query.state}</Badge>
-                                    <span className="text-sm text-muted-foreground">
-                                      PID: {query.pid}
-                                    </span>
-                                  </div>
-                                  <p className="text-sm">
-                                    <span className="font-medium">User:</span> {query.username}
-                                  </p>
-                                  <p className="text-sm">
-                                    <span className="font-medium">Duration:</span> {query.duration}
-                                  </p>
-                                  <p className="text-sm">
-                                    <span className="font-medium">Started:</span>{' '}
-                                    {format(new Date(query.started_at), 'PPpp')}
-                                  </p>
-                                </div>
-                              </div>
-                              <div className="bg-muted p-3 rounded-md">
-                                <pre className="text-sm overflow-x-auto whitespace-pre-wrap">
-                                  <code>{query.query}</code>
-                                </pre>
-                              </div>
-                            </div>
-                          ))
+                          <Accordion type="multiple" className="space-y-2">
+                            {runningQueries
+                              .sort((a, b) => durationToSeconds(b.duration) - durationToSeconds(a.duration))
+                              .map((query, index) => (
+                                <AccordionItem
+                                  key={`${query.pid}-${index}`}
+                                  value={`${query.pid}-${index}`}
+                                  className="border rounded-lg px-4"
+                                >
+                                  <AccordionTrigger className="hover:no-underline py-2">
+                                    <div className="flex flex-1 items-center gap-4">
+                                      <div className="flex items-center gap-2 min-w-[140px]">
+                                        <Badge variant="outline">{query.state}</Badge>
+                                        <span className="text-sm text-muted-foreground whitespace-nowrap">
+                                          PID: {query.pid}
+                                        </span>
+                                      </div>
+                                      <div className="text-left text-sm whitespace-nowrap min-w-[150px]">
+                                        <span className="font-medium">Duration:</span>{' '}
+                                        {query.duration}
+                                      </div>
+                                      <div className="flex-1 text-left text-sm truncate">
+                                        {query.query.split('\n')[0]}
+                                      </div>
+                                    </div>
+                                  </AccordionTrigger>
+                                  <AccordionContent className="pb-2">
+                                    <div className="space-y-2">
+                                      <div className="grid grid-cols-2 gap-2">
+                                        <div>
+                                          <p className="text-sm">
+                                            <span className="font-medium">User:</span> {query.username}
+                                          </p>
+                                          <p className="text-sm">
+                                            <span className="font-medium">Database:</span> {query.database}
+                                          </p>
+                                        </div>
+                                        <div>
+                                          <p className="text-sm">
+                                            <span className="font-medium">Started:</span>{' '}
+                                            {format(new Date(query.started_at), 'PPpp')}
+                                          </p>
+                                          <p className="text-sm">
+                                            <span className="font-medium">State:</span> {query.state}
+                                          </p>
+                                        </div>
+                                      </div>
+                                      <div className="bg-muted p-3 rounded-md mt-2">
+                                        <pre className="text-sm overflow-x-auto whitespace-pre-wrap">
+                                          <code>{query.query}</code>
+                                        </pre>
+                                      </div>
+                                    </div>
+                                  </AccordionContent>
+                                </AccordionItem>
+                              ))}
+                          </Accordion>
                         )}
                       </div>
                     )}

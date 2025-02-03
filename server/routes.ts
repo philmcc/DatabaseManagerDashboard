@@ -186,8 +186,20 @@ export function registerRoutes(app: Express): Server {
         },
       });
 
-      // Transform response to include formatted instance details
-      const formattedDatabases = userDatabases.map(db => ({
+      // Define the global ignore list for system databases
+      const defaultIgnoreList = ['postgres', 'rdsadmin', 'template0', 'template1'];
+
+      // Filter databases using the effective ignore list from the cluster
+      const filteredDatabases = userDatabases.filter((dbRecord) => {
+        if (!dbRecord.instance || !dbRecord.instance.cluster) return true;
+        const clusterIgnored: string[] = dbRecord.instance.cluster.ignoredDatabases || [];
+        const clusterExtra: string[] = dbRecord.instance.cluster.extraDatabases || [];
+        // Effective ignore: global list + cluster override, but if a name is in extra then remove it
+        const effectiveIgnore = [...defaultIgnoreList, ...clusterIgnored].filter(name => !clusterExtra.includes(name));
+        return !effectiveIgnore.includes(dbRecord.databaseName);
+      });
+
+      const formattedDatabases = filteredDatabases.map(db => ({
         ...db,
         instanceDetails: db.instance ? {
           id: db.instance.id,
@@ -2217,44 +2229,19 @@ export function registerRoutes(app: Express): Server {
 
     try {
       const { id } = req.params;
-      console.log(`Starting database deletion for ID: ${id} by user ${req.user.id}`);
+      console.log(`Archiving database connection with ID: ${id} by user ${req.user.id}`);
 
-      const [database] = await db
-        .select()
-        .from(databaseConnections)
-        .where(
-          and(
-            eq(databaseConnections.id, parseInt(id)),
-            eq(databaseConnections.userId, req.user.id)
-          )
-        )
-        .limit(1);
+      // Instead of deleting, mark the database as archived
+      await db.update(databaseConnections)
+        .set({ archived: true })
+        .where(eq(databaseConnections.id, parseInt(id)));
 
-      if (!database) {
-        console.warn(`Database not found: ${id}`);
-        return res.status(404).send("Database not found");
-      }
-
-      await db.transaction(async (tx) => {
-        console.log(`Deleting tags for database ${id}`);
-        await tx.delete(databaseTags).where(eq(databaseTags.databaseId, parseInt(id)));
-
-        console.log(`Deleting logs for database ${id}`);
-        await tx.delete(databaseOperationLogs).where(eq(databaseOperationLogs.databaseId, parseInt(id)));
-
-        console.log(`Deleting metrics for database ${id}`);
-        await tx.delete(databaseMetrics).where(eq(databaseMetrics.databaseId, parseInt(id)));
-
-        console.log(`Deleting database ${id}`);
-        await tx.delete(databaseConnections).where(eq(databaseConnections.id, parseInt(id)));
-      });
-
-      console.log(`Successfully deleted database ${id}`);
+      console.log(`Successfully archived database ${id}`);
       res.status(204).send();
     } catch (error) {
-      console.error("Database deletion error:", error);
+      console.error("Database archiving error:", error);
       res.status(500).json({
-        error: "Error deleting database connection",
+        error: "Error archiving database connection",
         details: error instanceof Error ? error.message : "Unknown error"
       });
     }
@@ -2408,6 +2395,153 @@ export function registerRoutes(app: Express): Server {
     } catch (error) {
       console.error(`Error deleting query ${req.params.id}:`, error);
       res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // Add a new scanning endpoint for instances
+  app.post("/api/instances/:id/scan", requireWriterOrAdmin, async (req, res) => {
+    if (!req.isAuthenticated()) {
+      return res.status(401).send("Not authenticated");
+    }
+    try {
+      const { id } = req.params;
+      const instanceId = parseInt(id);
+
+      // Retrieve the instance record
+      const [instance] = await db
+        .select()
+        .from(instances)
+        .where(eq(instances.id, instanceId))
+        .limit(1);
+
+      if (!instance) {
+        return res.status(404).json({ message: "Instance not found" });
+      }
+
+      // Connect to the instance using its superuser credentials
+      const client = new Client({
+        host: instance.hostname,
+        port: instance.port,
+        user: instance.username, // superuser credentials saved on instance
+        password: instance.password,
+        database: instance.defaultDatabaseName || "postgres", // use a default database (or override)
+        ssl: { rejectUnauthorized: false }
+      });
+      await client.connect();
+
+      // Retrieve all databases from the instance
+      const { rows } = await client.query("SELECT datname FROM pg_database;");
+      await client.end();
+
+      // Create a set of scanned database names
+      const scannedNames = rows.map(row => row.datname);
+
+      // Get all databaseConnections for this instance (including archived ones)
+      const existingDatabases = await db.query.databaseConnections.findMany({
+        where: eq(databaseConnections.instanceId, instanceId)
+      });
+
+      // For each scanned database, if it doesn't exist in our records, add it.
+      for (const dbName of scannedNames) {
+        const exists = existingDatabases.find(dbRec => dbRec.databaseName === dbName);
+        if (!exists) {
+          await db.insert(databaseConnections).values({
+            name: dbName,
+            instanceId: instanceId,
+            username: instance.username,
+            password: instance.password,
+            databaseName: dbName,
+            userId: req.user.id,
+            archived: false,
+          });
+        } else {
+          // If it exists, ensure it is marked active (not archived)
+          await db.update(databaseConnections)
+            .set({ archived: false })
+            .where(eq(databaseConnections.id, exists.id));
+        }
+      }
+
+      // Mark databases that exist in our records but were not found during the scan as archived.
+      for (const dbRec of existingDatabases) {
+        if (!scannedNames.includes(dbRec.databaseName) && !dbRec.archived) {
+          await db.update(databaseConnections)
+            .set({ archived: true })
+            .where(eq(databaseConnections.id, dbRec.id));
+        }
+      }
+
+      // For reader instances, update the linkedDatabaseId based on the writer record in the same cluster.
+      // (Assumes that only one writer exists per cluster.)
+      if (!instance.isWriter) {
+        // Find the writer instance from the same cluster.
+        const [writerInstance] = await db
+          .select()
+          .from(instances)
+          .where(and(
+            eq(instances.clusterId, instance.clusterId),
+            eq(instances.isWriter, true)
+          ))
+          .limit(1);
+        if (writerInstance) {
+          // For each database on this instance, find matching writer record (by databaseName) and update linkage.
+          const readerDatabases = await db.query.databaseConnections.findMany({
+            where: eq(databaseConnections.instanceId, instanceId)
+          });
+          for (const rec of readerDatabases) {
+            const writerDb = await db.query.databaseConnections.findFirst({
+              where: and(
+                eq(databaseConnections.instanceId, writerInstance.id),
+                eq(databaseConnections.databaseName, rec.databaseName)
+              )
+            });
+            if (writerDb) {
+              await db.update(databaseConnections)
+                .set({ linkedDatabaseId: writerDb.id })
+                .where(eq(databaseConnections.id, rec.id));
+            }
+          }
+        }
+      }
+
+      res.json({ message: "Database scan complete", scanned: scannedNames });
+    } catch (error) {
+      console.error("Instance scan error:", error);
+      res.status(500).json({
+        message: "Error scanning instance",
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  app.patch("/api/clusters/:id/settings", requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const clusterId = parseInt(id, 10);
+      if (isNaN(clusterId)) {
+        return res.status(400).json({ error: "Invalid cluster id" });
+      }
+      const { ignoredDatabases, extraDatabases } = req.body;
+      
+      console.log("Received cluster update request:", {
+        id,
+        parsedId: parseInt(id, 10),
+        body: req.body,
+        ignoredDatabases,
+        extraDatabases
+      });
+      
+      console.log(`Updating cluster ${clusterId} with ignoredDatabases:`, ignoredDatabases, "and extraDatabases:", extraDatabases);
+      await db.update(clusters)
+        .set({ 
+           ignored_databases: JSON.stringify(ignoredDatabases),
+           extra_databases: JSON.stringify(extraDatabases),
+         })
+        .where(eq(clusters.id, clusterId));
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error updating cluster settings:", error);
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
 

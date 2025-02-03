@@ -45,6 +45,8 @@ export const clusters = pgTable("clusters", {
   userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
   createdAt: timestamp("createdAt").defaultNow(),
   updatedAt: timestamp("updatedAt").defaultNow(),
+  ignoredDatabases: jsonb("ignored_databases").default("[]").notNull(),
+  extraDatabases: jsonb("extra_databases").default("[]").notNull(),
 });
 
 export const instances = pgTable("instances", {
@@ -72,6 +74,8 @@ export const databaseConnections = pgTable("database_connections", {
   userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
   createdAt: timestamp("createdAt").defaultNow(),
   updatedAt: timestamp("updatedAt").defaultNow(),
+  archived: boolean("archived").default(false).notNull(),
+  linkedDatabaseId: integer("linked_database_id").references(() => databaseConnections.id),
 });
 
 export const tags = pgTable("tags", {

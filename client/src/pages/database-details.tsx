@@ -515,6 +515,27 @@ export default function DatabaseDetails() {
                 <AccordionContent>
                   <div className="pt-4">
                     <div className="flex justify-end mb-4">
+                      {continuousKillSignature && (
+                        <div className="flex items-center gap-2 mr-auto">
+                          <Button
+                            className="bg-green-500 text-white hover:bg-green-600"
+                            size="sm"
+                            onClick={() => {
+                              setContinuousKillSignature(null);
+                              setIsContinuousKilling(false);
+                              toast({
+                                title: "Target Cleared",
+                                description: "No query is targeted for continuous kill.",
+                              });
+                            }}
+                          >
+                            Clear Target
+                          </Button>
+                          <span className="text-sm text-muted-foreground">
+                            Target: "{continuousKillSignature}"
+                          </span>
+                        </div>
+                      )}
                       <Button
                         variant="outline"
                         size="sm"
@@ -587,19 +608,34 @@ export default function DatabaseDetails() {
                                         </span>
                                         <Button
                                           variant="outline"
-                                          size="small"
+                                          size="sm"
+                                          className={`ml-2 ${
+                                            continuousKillSignature === extractSignature(query.query)
+                                              ? "bg-green-500 text-white hover:bg-green-600"
+                                              : ""
+                                          }`}
                                           onClick={(e) => {
                                             e.stopPropagation();
                                             const sig = extractSignature(query.query);
-                                            setContinuousKillSignature(sig);
-                                            toast({
-                                              title: "Target Set",
-                                              description: `Continuous kill target set (first 80 chars): "${sig}"`,
-                                            });
+                                            if (continuousKillSignature === sig) {
+                                              setContinuousKillSignature(null);
+                                              setIsContinuousKilling(false);
+                                              toast({
+                                                title: "Target Cleared",
+                                                description: "No query is targeted for continuous kill.",
+                                              });
+                                            } else {
+                                              setContinuousKillSignature(sig);
+                                              toast({
+                                                title: "Target Set",
+                                                description: `Continuous kill target set (first 80 chars): "${sig}"`,
+                                              });
+                                            }
                                           }}
-                                          className="ml-2"
                                         >
-                                          Set as Target
+                                          {continuousKillSignature === extractSignature(query.query)
+                                            ? "Clear Target"
+                                            : "Set as Target"}
                                         </Button>
                                       </div>
                                       <div className="text-left text-sm whitespace-nowrap min-w-[150px]">

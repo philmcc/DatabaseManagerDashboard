@@ -2652,5 +2652,61 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
+  // Add this endpoint with your other database routes
+  app.post("/api/databases/:id/kill-query", requireAuth, async (req, res) => {
+    const { id } = req.params;
+    const { pid } = req.body;
+    
+    console.log(`Attempting to kill query with PID ${pid} on database ${id}`);
+    
+    try {
+      const dbConnection = await db.query.databaseConnections.findFirst({
+        where: (connections, { eq }) => eq(connections.id, parseInt(id)),
+        with: {
+          instance: true
+        }
+      });
+
+      if (!dbConnection) {
+        console.error(`No database found with ID ${id}`);
+        return res.status(404).json({ error: 'Database connection not found' });
+      }
+
+      const pool = new Pool({
+        host: dbConnection.instance.hostname,
+        port: dbConnection.instance.port,
+        database: dbConnection.databaseName,
+        user: dbConnection.username,
+        password: dbConnection.password,
+        ssl: dbConnection.useSSL ? {
+          rejectUnauthorized: false
+        } : undefined
+      });
+
+      try {
+        // Attempt to kill the query
+        await pool.query('SELECT pg_terminate_backend($1)', [pid]);
+        console.log(`Successfully terminated query with PID ${pid}`);
+        
+        return res.json({ message: `Query with PID ${pid} has been terminated` });
+      } catch (queryError) {
+        console.error('Error killing query:', queryError);
+        return res.status(500).json({ 
+          error: 'Failed to kill query',
+          details: queryError.message 
+        });
+      } finally {
+        await pool.end();
+      }
+      
+    } catch (error) {
+      console.error('Error in kill-query endpoint:', error);
+      return res.status(500).json({ 
+        error: 'Failed to kill query',
+        details: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
   return app;
 }

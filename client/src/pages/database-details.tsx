@@ -3,7 +3,7 @@ import { Link, useParams } from "wouter";
 import BaseLayout from "@/components/layout/base-layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Database, Activity, Server, Clock, RefreshCw } from "lucide-react";
+import { Database, Activity, Server, Clock, RefreshCw, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { SelectDatabaseConnection, SelectDatabaseOperationLog } from "@db/schema";
@@ -195,6 +195,40 @@ export default function DatabaseDetails() {
       toast({
         variant: "destructive",
         title: "Deletion failed",
+        description: error.message,
+      });
+    },
+  });
+
+  const { mutate: killQuery } = useMutation({
+    mutationFn: async ({ pid }: { pid: number }) => {
+      const response = await fetch(`/api/databases/${id}/kill-query`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ pid }),
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(error);
+      }
+
+      return response.json();
+    },
+    onSuccess: () => {
+      refetchQueries();
+      toast({
+        title: "Query Terminated",
+        description: "The query has been successfully terminated",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Failed to terminate query",
         description: error.message,
       });
     },
@@ -488,24 +522,39 @@ export default function DatabaseDetails() {
                                   </AccordionTrigger>
                                   <AccordionContent className="pb-2">
                                     <div className="space-y-2">
-                                      <div className="grid grid-cols-2 gap-2">
-                                        <div>
-                                          <p className="text-sm">
-                                            <span className="font-medium">User:</span> {query.username}
-                                          </p>
-                                          <p className="text-sm">
-                                            <span className="font-medium">Database:</span> {query.database}
-                                          </p>
+                                      <div className="flex justify-between items-start">
+                                        <div className="grid grid-cols-2 gap-2">
+                                          <div>
+                                            <p className="text-sm">
+                                              <span className="font-medium">User:</span> {query.username}
+                                            </p>
+                                            <p className="text-sm">
+                                              <span className="font-medium">Database:</span> {query.database}
+                                            </p>
+                                          </div>
+                                          <div>
+                                            <p className="text-sm">
+                                              <span className="font-medium">Started:</span>{' '}
+                                              {format(new Date(query.started_at), 'PPpp')}
+                                            </p>
+                                            <p className="text-sm">
+                                              <span className="font-medium">State:</span> {query.state}
+                                            </p>
+                                          </div>
                                         </div>
-                                        <div>
-                                          <p className="text-sm">
-                                            <span className="font-medium">Started:</span>{' '}
-                                            {format(new Date(query.started_at), 'PPpp')}
-                                          </p>
-                                          <p className="text-sm">
-                                            <span className="font-medium">State:</span> {query.state}
-                                          </p>
-                                        </div>
+                                        <Button
+                                          variant="destructive"
+                                          size="sm"
+                                          onClick={() => {
+                                            if (confirm(`Are you sure you want to terminate this query (PID: ${query.pid})?`)) {
+                                              killQuery({ pid: query.pid });
+                                            }
+                                          }}
+                                          className="flex items-center gap-2"
+                                        >
+                                          <XCircle className="h-4 w-4" />
+                                          Kill Query
+                                        </Button>
                                       </div>
                                       <div className="bg-muted p-3 rounded-md mt-2">
                                         <pre className="text-sm overflow-x-auto whitespace-pre-wrap">

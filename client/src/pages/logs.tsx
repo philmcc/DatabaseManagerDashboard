@@ -172,6 +172,12 @@ export default function LogsPage() {
                         {log.details.error && (
                           <p className="text-red-500">Error: {log.details.error}</p>
                         )}
+                        {log.details.query && (
+                          <>
+                            <p className="font-medium text-xs uppercase text-gray-500 mt-2">Query:</p>
+                            <pre className="whitespace-pre-wrap text-xs bg-gray-100 p-2 rounded">{log.details.query}</pre>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>

@@ -2655,9 +2655,10 @@ export function registerRoutes(app: Express): Server {
   // Add this endpoint with your other database routes
   app.post("/api/databases/:id/kill-query", requireAuth, async (req, res) => {
     const { id } = req.params;
-    const { pid } = req.body;
+    const { pid, queryText, action } = req.body;
     
     console.log(`Attempting to kill query with PID ${pid} on database ${id}`);
+    console.log('Kill query details:', { queryText, action });
     
     try {
       const dbConnection = await db.query.databaseConnections.findFirst({
@@ -2688,9 +2689,42 @@ export function registerRoutes(app: Express): Server {
         await pool.query('SELECT pg_terminate_backend($1)', [pid]);
         console.log(`Successfully terminated query with PID ${pid}`);
         
+        // Only create operation log for manual kills, not continuous kill executions
+        if (action !== 'continuous_kill_execution') {
+          // Create operation log after successful kill
+          await db.insert(databaseOperationLogs).values({
+            databaseId: parseInt(id),
+            userId: req.user.id,
+            operationType: 'kill_query',
+            operationResult: 'success',
+            details: {
+              pid,
+              query: queryText,
+              action
+            }
+          });
+          console.log("Created operation log for kill query");
+        }
+        
         return res.json({ message: `Query with PID ${pid} has been terminated` });
       } catch (queryError) {
         console.error('Error killing query:', queryError);
+        // Only create error log for manual kills, not continuous kill executions
+        if (action !== 'continuous_kill_execution') {
+          // Log the error
+          await db.insert(databaseOperationLogs).values({
+            databaseId: parseInt(id),
+            userId: req.user.id,
+            operationType: 'kill_query',
+            operationResult: 'error',
+            details: {
+              pid,
+              query: queryText,
+              action,
+              error: queryError.message
+            }
+          });
+        }
         return res.status(500).json({ 
           error: 'Failed to kill query',
           details: queryError.message 
@@ -2703,6 +2737,42 @@ export function registerRoutes(app: Express): Server {
       console.error('Error in kill-query endpoint:', error);
       return res.status(500).json({ 
         error: 'Failed to kill query',
+        details: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  app.post("/api/databases/:id/operation-log", requireAuth, async (req, res) => {
+    console.log("Received operation log request:", {
+      databaseId: req.params.id,
+      body: {
+        ...req.body,
+        details: req.body.details ? JSON.stringify(req.body.details).substring(0, 1000) : null
+      }
+    });
+    
+    try {
+      console.log("Inserting operation log into database...");
+      // Ensure details is serializable and limited in size
+      const sanitizedDetails = typeof req.body.details === 'object' 
+        ? JSON.parse(JSON.stringify(req.body.details)) 
+        : req.body.details;
+
+      const result = await db.insert(databaseOperationLogs).values({
+        databaseId: parseInt(req.params.id),
+        userId: req.user.id,
+        operationType: req.body.operationType,
+        operationResult: req.body.operationResult,
+        details: sanitizedDetails,
+      }).returning('*');
+      
+      console.log("Operation log inserted:", result);
+      
+      return res.json({ success: true });
+    } catch (error) {
+      console.error("Failed to insert operation log:", error);
+      return res.status(500).json({ 
+        error: "Failed to create operation log",
         details: error instanceof Error ? error.message : String(error)
       });
     }

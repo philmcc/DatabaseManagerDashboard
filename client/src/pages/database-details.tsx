@@ -71,6 +71,8 @@ export default function DatabaseDetails() {
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [continuousKillSignature, setContinuousKillSignature] = useState<string | null>(null);
   const [isContinuousKilling, setIsContinuousKilling] = useState(false);
+  const [continuousKillCount, setContinuousKillCount] = useState(0);
+  const [continuousKillStartTime, setContinuousKillStartTime] = useState<string | null>(null);
 
   const { data: database, isLoading: isLoadingDatabase } = useQuery<SelectDatabaseConnection & {
     instance: {
@@ -215,35 +217,123 @@ export default function DatabaseDetails() {
 
   const { mutate: killQuery } = useMutation({
     mutationFn: async ({ pid }: { pid: number }) => {
+      console.log(`Starting kill query operation for PID ${pid}`);
+      
+      // Get the query details for logging
+      const queryToKill = runningQueries?.find(q => q.pid === pid);
+      console.log('Query details to kill:', queryToKill);
+      
+      // First, create a log entry
+      console.log('Attempting to create operation log entry...');
+      const logResponse = await fetch(`/api/databases/${id}/operation-log`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          databaseId: parseInt(id),
+          operationType: 'kill_query',
+          operationResult: 'success',
+          details: {
+            pid,
+            queryText: queryToKill?.query?.substring(0, 500),
+            username: queryToKill?.username,
+            duration: queryToKill?.duration,
+            action: 'manual_kill'
+          }
+        }),
+      });
+
+      if (!logResponse.ok) {
+        const logError = await logResponse.text();
+        console.error('Failed to create operation log:', {
+          status: logResponse.status,
+          statusText: logResponse.statusText,
+          error: logError
+        });
+      } else {
+        console.log('Successfully created operation log entry');
+      }
+
+      console.log('Attempting to kill query...');
       const response = await fetch(`/api/databases/${id}/kill-query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ pid }),
+        body: JSON.stringify({ 
+          pid,
+          queryText: queryToKill?.query,
+          action: 'manual_kill'
+        }),
       });
   
       if (!response.ok) {
         const error = await response.text();
+        console.error('Kill query failed, attempting to log error:', {
+          status: response.status,
+          statusText: response.statusText,
+          error
+        });
+
+        // Log the failure
+        const errorLogResponse = await fetch(`/api/databases/${id}/operation-log`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            databaseId: parseInt(id),
+            operationType: 'kill_query',
+            operationResult: 'error',
+            details: {
+              pid,
+              query: queryToKill?.query,
+              username: queryToKill?.username,
+              duration: queryToKill?.duration,
+              action: 'manual_kill',
+              error: error
+            }
+          }),
+        });
+
+        if (!errorLogResponse.ok) {
+          console.error('Failed to create error operation log:', {
+            status: errorLogResponse.status,
+            statusText: errorLogResponse.statusText,
+            error: await errorLogResponse.text()
+          });
+        } else {
+          console.log('Successfully created error operation log entry');
+        }
+
         throw new Error(error);
       }
   
+      console.log('Successfully killed query');
       return response.json();
     },
     onSuccess: () => {
       refetchQueries();
+      console.log('Invalidating queries after successful kill');
+      // Invalidate logs queries to show the new log entry
+      queryClient.invalidateQueries({ 
+        predicate: (query) => {
+          const key = query.queryKey[0].toString();
+          const matches = key.includes('/api/database-logs') || key.includes('/api/databases/' + id + '/operation-log');
+          console.log('Invalidating query key:', key, 'matches:', matches);
+          return matches;
+        }
+      });
       toast({
         title: "Query Terminated",
         description: "The query has been successfully terminated",
       });
-      console.log("Kill query request succeeded for PID (see network logs)");
     },
     onError: (error: Error) => {
+      console.error('Kill query mutation error:', error);
       toast({
         variant: "destructive",
         title: "Failed to terminate query",
         description: error.message,
       });
-      console.error("Kill query request failed:", error);
     },
   });
 
@@ -271,6 +361,73 @@ export default function DatabaseDetails() {
     }
   };
 
+  // Add logging for continuous kill start/stop
+  const handleContinuousKillToggle = async () => {
+    if (isContinuousKilling) {
+      const endTime = new Date().toISOString();
+      // Log stopping continuous kill
+      await fetch(`/api/databases/${id}/operation-log`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          databaseId: parseInt(id),
+          operationType: 'continuous_kill_stop',
+          operationResult: 'success',
+          details: {
+            targetSignature: continuousKillSignature?.substring(0, 500),
+            startTime: continuousKillStartTime,
+            endTime: endTime,
+            killCount: continuousKillCount,
+            action: 'continuous_kill_stop'
+          }
+        }),
+      });
+      
+      setIsContinuousKilling(false);
+      setContinuousKillCount(0);
+      setContinuousKillStartTime(null);
+      setContinuousKillSignature(null);
+      toast({
+        title: "Continuous Kill Stopped",
+        description: "No longer automatically killing matching queries.",
+      });
+    } else {
+      if (continuousKillSignature) {
+        const startTime = new Date().toISOString();
+        // Log starting continuous kill
+        await fetch(`/api/databases/${id}/operation-log`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            databaseId: parseInt(id),
+            operationType: 'continuous_kill_start',
+            operationResult: 'success',
+            details: {
+              targetSignature: continuousKillSignature.substring(0, 500),
+              startTime: startTime,
+              action: 'continuous_kill_start'
+            }
+          }),
+        });
+        
+        setIsContinuousKilling(true);
+        setContinuousKillStartTime(startTime);
+        setContinuousKillCount(0);
+        toast({
+          title: "Continuous Kill Activated",
+          description: "Matching queries will be killed repeatedly.",
+        });
+      } else {
+        toast({
+          title: "No target selected",
+          description: "Please set a running query as target first.",
+        });
+      }
+    }
+  };
+
   // When continuous kill mode is active, periodically refetch running queries and kill matching ones.
   useEffect(() => {
     if (!isContinuousKilling || !continuousKillSignature) return;
@@ -281,20 +438,38 @@ export default function DatabaseDetails() {
           const result = await refetchQueries();
           const updatedQueries: RunningQuery[] = result.data || [];
 
-          console.log("Continuous kill check: Target signature:", continuousKillSignature);
-
-          updatedQueries.forEach((query) => {
+          for (const query of updatedQueries) {
             const querySig = extractSignature(query.query);
-            console.log(`Checking query PID ${query.pid} with extracted signature: "${querySig}"`);
-            console.log(`Target signature is: "${continuousKillSignature}"`);
-
             if (querySig === continuousKillSignature) {
-              console.log(`Exact match found. Attempting to kill query with PID: ${query.pid}`);
-              killQuery({ pid: query.pid });
-            } else {
-              console.log(`No exact match for query PID ${query.pid}.`);
+              try {
+                // Kill the query
+                const response = await fetch(`/api/databases/${id}/kill-query`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  credentials: 'include',
+                  body: JSON.stringify({ 
+                    pid: query.pid,
+                    queryText: query.query,
+                    action: 'continuous_kill_execution'
+                  }),
+                });
+
+                if (!response.ok) {
+                  throw new Error(await response.text());
+                }
+
+                // Increment the kill count
+                setContinuousKillCount(prev => prev + 1);
+
+                // Invalidate queries
+                queryClient.invalidateQueries({ 
+                  predicate: (query) => query.queryKey[0].toString().includes('/api/database-logs')
+                });
+              } catch (error) {
+                console.error("Error killing query:", error);
+              }
             }
-          });
+          }
         } catch (error) {
           console.error("Error in continuous kill effect:", error);
         }
@@ -302,7 +477,7 @@ export default function DatabaseDetails() {
     }, 2000);
 
     return () => clearInterval(intervalId);
-  }, [isContinuousKilling, continuousKillSignature, refetchQueries, killQuery]);
+  }, [isContinuousKilling, continuousKillSignature, refetchQueries, queryClient, id]);
 
   if (isLoadingDatabase) {
     return (
@@ -406,94 +581,99 @@ export default function DatabaseDetails() {
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Activity className="h-5 w-5" />
-              Operation Logs
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {isLoadingLogs ? (
-              <p className="text-center text-muted-foreground">Loading logs...</p>
-            ) : !logs.length ? (
-              <p className="text-center text-muted-foreground">No operation logs yet.</p>
-            ) : (
-              <>
-                <div className="space-y-4">
-                  {logs.map((log) => (
-                    <div key={log.id} className="border-b pb-4 last:border-0">
-                      <div className="flex flex-col space-y-2">
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <p className="font-medium">
-                              {log.operationType.charAt(0).toUpperCase() + log.operationType.slice(1)} - {' '}
-                              <span className={log.operationResult === 'success' ? 'text-green-600' : 'text-red-600'}>
-                                {log.operationResult}
-                              </span>
-                            </p>
-                            <p className="text-sm text-muted-foreground">
-                              {log.timestamp ? format(new Date(log.timestamp), 'PPpp') : 'Timestamp not available'}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="text-sm text-muted-foreground bg-slate-50 p-2 rounded">
-                          {log.user && (
-                            <p className="font-medium mb-1">
-                              By: {log.user.fullName || log.user.username}
-                            </p>
-                          )}
-                          {log.details.before && log.details.after && (
-                            <>
-                              <div className="mt-1">
-                                <p className="font-medium text-xs uppercase text-gray-500">Changes:</p>
-                                {Object.keys(log.details.before).map(key => {
-                                  const beforeVal = log.details.before?.[key];
-                                  const afterVal = log.details.after?.[key];
-                                  if (beforeVal !== afterVal) {
-                                    return (
-                                      <p key={key} className="ml-2">
-                                        <span className="font-medium">{key}:</span>{' '}
-                                        <span className="text-red-500">{beforeVal}</span>{' '}
-                                        <span className="text-gray-500">→</span>{' '}
-                                        <span className="text-green-500">{afterVal}</span>
-                                      </p>
-                                    );
-                                  }
-                                  return null;
-                                })}
+          <Accordion type="single" collapsible>
+            <AccordionItem value="logs">
+              <CardHeader>
+                <AccordionTrigger className="w-full">
+                  <CardTitle className="flex items-center gap-2">
+                    <Activity className="h-5 w-5" />
+                    Operation Logs
+                  </CardTitle>
+                </AccordionTrigger>
+              </CardHeader>
+              <AccordionContent>
+                <div className="px-6 py-4">
+                  {isLoadingLogs ? (
+                    <p className="text-center text-muted-foreground">Loading logs...</p>
+                  ) : !logs.length ? (
+                    <p className="text-center text-muted-foreground">No operation logs yet.</p>
+                  ) : (
+                    <>
+                      <Accordion type="multiple" className="space-y-4">
+                        {logs.map((log) => (
+                          <AccordionItem key={log.id} value={String(log.id)}>
+                            <AccordionTrigger>
+                              <div className="flex justify-between items-center w-full">
+                                <div>
+                                  <p className="font-medium">
+                                    {log.operationType.charAt(0).toUpperCase() + log.operationType.slice(1)} -{' '}
+                                    <span className={log.operationResult === 'success' ? 'text-green-600' : 'text-red-600'}>
+                                      {log.operationResult}
+                                    </span>
+                                  </p>
+                                  <p className="text-sm text-muted-foreground">
+                                    {log.timestamp ? format(new Date(log.timestamp), 'PPpp') : 'Timestamp not available'}
+                                  </p>
+                                </div>
                               </div>
-                            </>
-                          )}
-                          {log.details.error && (
-                            <p className="text-red-500">Error: {log.details.error}</p>
-                          )}
-                        </div>
+                            </AccordionTrigger>
+                            <AccordionContent>
+                              <div className="log-details text-sm text-muted-foreground bg-slate-50 p-2 rounded">
+                                {log.user && (
+                                  <p className="font-medium mb-1">
+                                    By: {log.user.fullName || log.user.username}
+                                  </p>
+                                )}
+                                {log.details.before && log.details.after && (
+                                  <>
+                                    <div className="mt-1">
+                                      <p className="font-medium text-xs uppercase text-gray-500">Changes:</p>
+                                      {Object.keys(log.details.before).map(key => {
+                                        const beforeVal = log.details.before?.[key];
+                                        const afterVal = log.details.after?.[key];
+                                        if (beforeVal !== afterVal) {
+                                          return (
+                                            <p key={key} className="ml-2">
+                                              <span className="font-medium">{key}:</span>{' '}
+                                              <span className="text-red-500">{beforeVal}</span>{' '}
+                                              <span className="text-gray-500">→</span>{' '}
+                                              <span className="text-green-500">{afterVal}</span>
+                                            </p>
+                                          );
+                                        }
+                                        return null;
+                                      })}
+                                    </div>
+                                  </>
+                                )}
+                                {log.details.error && (
+                                  <p className="text-red-500">Error: {log.details.error}</p>
+                                )}
+                                {log.details.query && (
+                                  <>
+                                    <p className="font-medium text-xs uppercase text-gray-500 mt-2">Query:</p>
+                                    <pre className="whitespace-pre-wrap text-xs bg-gray-100 p-2 rounded">
+                                      {log.details.query}
+                                    </pre>
+                                  </>
+                                )}
+                                {(!log.details.query && !log.details.error && !(log.details.before && log.details.after)) && JSON.stringify(log.details)}
+                              </div>
+                            </AccordionContent>
+                          </AccordionItem>
+                        ))}
+                      </Accordion>
+                      <div className="mt-4 flex justify-between items-center">
+                        <Button variant="outline" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>Previous</Button>
+                        <span className="text-sm text-muted-foreground">Page {page} of {totalPages}</span>
+                        <Button variant="outline" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}>Next</Button>
                       </div>
-                    </div>
-                  ))}
+                    </>
+                  )}
                 </div>
-                <div className="mt-4 flex justify-between items-center">
-                  <Button
-                    variant="outline"
-                    onClick={() => setPage(p => Math.max(1, p - 1))}
-                    disabled={page === 1}
-                  >
-                    Previous
-                  </Button>
-                  <span className="text-sm text-muted-foreground">
-                    Page {page} of {totalPages}
-                  </span>
-                  <Button
-                    variant="outline"
-                    onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                    disabled={page === totalPages}
-                  >
-                    Next
-                  </Button>
-                </div>
-              </>
-            )}
-          </CardContent>
+              </AccordionContent>
+            </AccordionItem>
+          </Accordion>
         </Card>
 
         <Card className="mt-6">
@@ -520,14 +700,7 @@ export default function DatabaseDetails() {
                           <Button
                             className="bg-green-500 text-white hover:bg-green-600"
                             size="sm"
-                            onClick={() => {
-                              setContinuousKillSignature(null);
-                              setIsContinuousKilling(false);
-                              toast({
-                                title: "Target Cleared",
-                                description: "No query is targeted for continuous kill.",
-                              });
-                            }}
+                            onClick={handleContinuousKillToggle}
                           >
                             Clear Target
                           </Button>
@@ -548,28 +721,7 @@ export default function DatabaseDetails() {
                       <Button
                         variant={isContinuousKilling ? "destructive" : "default"}
                         size="sm"
-                        onClick={() => {
-                          if (isContinuousKilling) {
-                            setIsContinuousKilling(false);
-                            toast({
-                              title: "Continuous Kill Stopped",
-                              description: "No longer automatically killing matching queries.",
-                            });
-                          } else {
-                            if (continuousKillSignature) {
-                              setIsContinuousKilling(true);
-                              toast({
-                                title: "Continuous Kill Activated",
-                                description: "Matching queries will be killed repeatedly.",
-                              });
-                            } else {
-                              toast({
-                                title: "No target selected",
-                                description: "Please set a running query as target first.",
-                              });
-                            }
-                          }
-                        }}
+                        onClick={handleContinuousKillToggle}
                         className="ml-2"
                       >
                         {isContinuousKilling ? "Stop Continuous Kill" : "Start Continuous Kill"}
@@ -618,12 +770,7 @@ export default function DatabaseDetails() {
                                             e.stopPropagation();
                                             const sig = extractSignature(query.query);
                                             if (continuousKillSignature === sig) {
-                                              setContinuousKillSignature(null);
-                                              setIsContinuousKilling(false);
-                                              toast({
-                                                title: "Target Cleared",
-                                                description: "No query is targeted for continuous kill.",
-                                              });
+                                              handleContinuousKillToggle();
                                             } else {
                                               setContinuousKillSignature(sig);
                                               toast({

@@ -1,4 +1,5 @@
-import { Switch, Route } from "wouter";
+import React from "react";
+import { Route, Switch } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -25,33 +26,7 @@ import HealthCheckReports from "@/pages/health-check-reports";
 import { useUser } from "@/hooks/use-user";
 import { Loader2 } from "lucide-react";
 import { useLocation } from "wouter";
-
-function PermissionDenied() {
-  const [, setLocation] = useLocation();
-  
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <Card className="w-full max-w-md mx-4">
-        <CardHeader>
-          <CardTitle className="text-center text-red-600">Permission Denied</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-center mb-4">
-            You don't have permission to access this page. Writer or Admin access is required.
-          </p>
-          <div className="flex justify-center">
-            <Button
-              onClick={() => setLocation("/")}
-              className="w-full max-w-xs"
-            >
-              Back to Dashboard
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
+import PermissionDenied from "@/pages/permission-denied";
 
 function Router() {
   const { user, isLoading } = useUser();

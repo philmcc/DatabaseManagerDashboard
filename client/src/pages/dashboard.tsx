@@ -11,6 +11,8 @@ import { SelectDatabaseConnection, SelectDatabaseOperationLog } from "@db/schema
 import { useState } from "react";
 import { format } from "date-fns";
 import { Badge } from "@/components/ui/badge";
+import Navbar from "@/components/layout/navbar";
+import { Loader2 } from "lucide-react";
 
 interface LogDetails {
   before?: Record<string, any>;
@@ -31,6 +33,13 @@ interface DatabaseLog extends SelectDatabaseOperationLog {
   details: LogDetails;
 }
 
+interface Cluster {
+  id: number;
+  name: string;
+  description?: string | null;
+  instances: { id: number; hostname: string }[];
+}
+
 export default function Dashboard() {
   const { user, logout } = useUser();
   const [, setLocation] = useLocation();
@@ -40,16 +49,15 @@ export default function Dashboard() {
   const pageSize = 5;
   const queryClient = useQueryClient();
 
-  const { data: databases = [], isLoading } = useQuery<(SelectDatabaseConnection & {
-    instance: {
-      id: number;
-      hostname: string;
-      port: number;
-      isWriter: boolean;
-    };
-  })[]>({
-    queryKey: ['/api/databases'],
-    enabled: !!user,
+  const { data: clusters, isLoading, error } = useQuery<Cluster[]>({
+    queryKey: ["/api/clusters"],
+    queryFn: async () => {
+      const res = await fetch("/api/clusters", { credentials: "include" });
+      if (!res.ok) {
+        throw new Error("Failed to fetch clusters");
+      }
+      return res.json();
+    },
   });
 
   const { data: logsData, isLoading: isLoadingLogs } = useQuery<{ logs: DatabaseLog[], total: number }>({
@@ -117,227 +125,111 @@ export default function Dashboard() {
     }
   };
 
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="animate-spin h-8 w-8" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <p>Error loading clusters</p>
+      </div>
+    );
+  }
+
   return (
-    <BaseLayout>
-      <div className="space-y-4">
-        <div className="flex justify-between items-center">
-          <h1 className="text-2xl font-bold">
-            Welcome {user?.fullName || user?.username}
-          </h1>
-          <div className="space-x-2">
-            {user?.role === 'ADMIN' && (
-              <Button
-                variant="outline"
-                onClick={() => setLocation("/users")}
-              >
-                <Users className="mr-2 h-4 w-4" />
-                Manage Users
-              </Button>
-            )}
-            <Button
-              variant="outline"
-              onClick={() => setLocation("/profile-settings")}
-            >
-              <Settings className="mr-2 h-4 w-4" />
-              Profile Settings
+    <div>
+      <Navbar />
+      <div className="container mx-auto py-6">
+        <h1 className="text-4xl font-bold mb-4">Dashboard</h1>
+        <h2 className="text-3xl font-bold mb-6">Clusters</h2>
+        {clusters && clusters.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {clusters.map((cluster) => (
+              <Card key={cluster.id}>
+                <CardHeader>
+                  <CardTitle>
+                    <Link href={`/clusters/${cluster.id}`}>
+                      {cluster.name}
+                    </Link>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p>{cluster.description || "No description provided."}</p>
+                  <p className="mt-2 font-medium">
+                    Instances: {cluster.instances?.length || 0}
+                  </p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        ) : (
+          <p>No clusters found.</p>
+        )}
+
+        <div className="mt-10">
+          <h2 className="text-2xl font-bold mb-4">Recent Database Logs</h2>
+          {isLoadingLogs ? (
+            <div className="flex items-center justify-center">
+              <Loader2 className="animate-spin h-8 w-8" />
+            </div>
+          ) : logs.length > 0 ? (
+            <div className="overflow-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Operation</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Result</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Database</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Details</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {logs.map((log) => (
+                    <tr key={log.id}>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{format(new Date(log.timestamp), 'Pp')}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{log.operationType}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{log.operationResult}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{log.user ? log.user.username : "N/A"}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{log.database ? log.database.name : "N/A"}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{JSON.stringify(log.details)}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {log.database && (
+                          <Button
+                            onClick={() => testConnection(log.database.id)}
+                            disabled={testingDatabaseId === log.database.id}
+                            size="small"
+                          >
+                            {testingDatabaseId === log.database.id ? "Testing..." : "Test Connection"}
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="text-center text-gray-500">No logs available.</p>
+          )}
+          <div className="mt-4 flex justify-center items-center gap-4">
+            <Button variant="outline" disabled={page <= 1} onClick={() => setPage(page - 1)}>
+              Previous
             </Button>
-            <Button
-              variant="outline"
-              onClick={handleLogout}
-            >
-              <LogOut className="mr-2 h-4 w-4" />
-              Logout
+            <span>Page {page} of {totalPages}</span>
+            <Button variant="outline" disabled={page >= totalPages} onClick={() => setPage(page + 1)}>
+              Next
             </Button>
           </div>
         </div>
-
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {isLoading ? (
-            <Card>
-              <CardContent className="pt-6">
-                <p className="text-center text-muted-foreground">
-                  Loading databases...
-                </p>
-              </CardContent>
-            </Card>
-          ) : databases.length === 0 ? (
-            <Card>
-              <CardContent className="pt-6">
-                <p className="text-center text-muted-foreground">
-                  No databases added yet.
-                </p>
-              </CardContent>
-            </Card>
-          ) : (
-            databases.map((db) => (
-              <Link key={db.id} href={`/databases/${db.id}`}>
-                <Card className="cursor-pointer hover:bg-accent/5 transition-colors">
-                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                    <CardTitle className="text-sm font-medium">
-                      {db.name}
-                    </CardTitle>
-                    <Database className="h-4 w-4 text-muted-foreground" />
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-xs text-muted-foreground space-y-2">
-                      <p>Database: {db.databaseName}</p>
-                      <Link
-                        href={`/instances/${db.instance.id}`}
-                        className="flex items-center gap-1 text-primary hover:underline"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <Server className="h-3 w-3" />
-                        {db.instance.hostname}
-                        <Badge variant="outline" className="ml-1">
-                          {db.instance.isWriter ? 'Writer' : 'Reader'}
-                        </Badge>
-                      </Link>
-                      <p>Username: {db.username}</p>
-                    </div>
-                    <div className="mt-2 space-x-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          setLocation(`/databases/${db.id}/edit`);
-                        }}
-                      >
-                        Edit
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={testingDatabaseId === db.id}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          testConnection(db.id);
-                        }}
-                      >
-                        {testingDatabaseId === db.id ? "Testing..." : "Test Connection"}
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              </Link>
-            ))
-          )}
-        </div>
-
-        <Button
-          className="mt-4"
-          onClick={() => setLocation("/databases/new")}
-        >
-          <Database className="mr-2 h-4 w-4" />
-          Add New Database
-        </Button>
-
-        <div className="mt-8">
-          <Card>
-            <CardHeader>
-              <div className="flex justify-between items-center">
-                <CardTitle className="flex items-center gap-2">
-                  <Activity className="h-5 w-5" />
-                  Recent Database Operations
-                </CardTitle>
-                <Button
-                  variant="outline"
-                  onClick={() => setLocation("/logs")}
-                >
-                  View All Logs
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {isLoadingLogs ? (
-                <p className="text-center text-muted-foreground">Loading logs...</p>
-              ) : !logs.length ? (
-                <p className="text-center text-muted-foreground">No operation logs yet.</p>
-              ) : (
-                <>
-                  <div className="space-y-4">
-                    {logs.map((log) => (
-                      <div key={log.id} className="border-b pb-4 last:border-0">
-                        <div className="flex flex-col space-y-2">
-                          <div className="flex justify-between items-start">
-                            <div>
-                              <p className="font-medium">
-                                {log.operationType.charAt(0).toUpperCase() + log.operationType.slice(1)} -{' '}
-                                <span className={log.operationResult === 'success' ? 'text-green-600' : 'text-red-600'}>
-                                  {log.operationResult}
-                                </span>
-                              </p>
-                              <p className="text-sm text-muted-foreground">
-                                {log.timestamp ? format(new Date(log.timestamp), 'PPpp') : 'Timestamp not available'}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="text-sm text-muted-foreground bg-slate-50 p-2 rounded">
-                            {log.user && (
-                              <p className="font-medium mb-1">
-                                By: {log.user.fullName || log.user.username}
-                              </p>
-                            )}
-                            {log.database && (
-                              <p className="text-sm mb-2 text-primary">
-                                Database: {log.database.name} ({log.database.host}:{log.database.port})
-                              </p>
-                            )}
-                            {log.details.before && log.details.after && (
-                              <>
-                                <div className="mt-1">
-                                  <p className="font-medium text-xs uppercase text-gray-500">Changes:</p>
-                                  {Object.keys(log.details.before).map(key => {
-                                    const beforeVal = log.details.before?.[key];
-                                    const afterVal = log.details.after?.[key];
-                                    if (beforeVal !== afterVal) {
-                                      return (
-                                        <p key={key} className="ml-2">
-                                          <span className="font-medium">{key}:</span>{' '}
-                                          <span className="text-red-500">{beforeVal}</span>{' '}
-                                          <span className="text-gray-500">→</span>{' '}
-                                          <span className="text-green-500">{afterVal}</span>
-                                        </p>
-                                      );
-                                    }
-                                    return null;
-                                  })}
-                                </div>
-                              </>
-                            )}
-                            {log.details.error && (
-                              <p className="text-red-500">Error: {log.details.error}</p>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="mt-4 flex justify-between items-center">
-                    <Button
-                      variant="outline"
-                      onClick={() => setPage(p => Math.max(1, p - 1))}
-                      disabled={page === 1}
-                    >
-                      Previous
-                    </Button>
-                    <span className="text-sm text-muted-foreground">
-                      Page {page} of {totalPages}
-                    </span>
-                    <Button
-                      variant="outline"
-                      onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                      disabled={page === totalPages}
-                    >
-                      Next
-                    </Button>
-                  </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
-        </div>
       </div>
-    </BaseLayout>
+    </div>
   );
 }

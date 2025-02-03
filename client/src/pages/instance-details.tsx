@@ -148,12 +148,14 @@ function InstanceDetails() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>Databases</CardTitle>
+              {/*
               <Button asChild variant="outline" size="sm">
                 <Link href={`/databases/new?instanceId=${instance.id}`}>
                   <Database className="mr-2 h-4 w-4" />
                   New Database
                 </Link>
               </Button>
+              */}
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
@@ -173,6 +175,30 @@ function InstanceDetails() {
                   </p>
                 )}
               </div>
+              <Button
+                variant="default"
+                onClick={async () => {
+                  const confirmed = confirm("Scan this instance for new databases?");
+                  if (!confirmed) return;
+                  try {
+                    const res = await fetch(`/api/instances/${instance.id}/scan`, {
+                      method: 'POST',
+                      credentials: 'include'
+                    });
+                    if (!res.ok) {
+                      const errorText = await res.text();
+                      alert("Scan failed: " + errorText);
+                    } else {
+                      alert("Scan complete – the list will be refreshed");
+                      window.location.reload();
+                    }
+                  } catch (err: any) {
+                    alert("Scan error: " + err.message);
+                  }
+                }}
+              >
+                Scan Databases
+              </Button>
             </CardContent>
           </Card>
         </div>

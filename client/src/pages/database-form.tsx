@@ -228,6 +228,10 @@ export default function DatabaseForm() {
               <Database className="h-5 w-5" />
               {isEditMode ? "Edit Database Connection" : "Add Database Connection"}
             </CardTitle>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Note: Database connections are now automatically maintained by scanning instances.
+              Use this form only for manual overrides or to add extra entries at the cluster level.
+            </p>
           </CardHeader>
           <CardContent>
             <Form {...form}>

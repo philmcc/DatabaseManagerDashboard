@@ -7,7 +7,7 @@ import { Database, Activity, Server, Clock, RefreshCw, XCircle } from "lucide-re
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { SelectDatabaseConnection, SelectDatabaseOperationLog } from "@db/schema";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { format } from "date-fns";
 import {
   Accordion,
@@ -51,6 +51,17 @@ const durationToSeconds = (duration: string): number => {
   return parseFloat(duration.replace('s', ''));
 };
 
+// Helper function to extract a normalized signature from a query text.
+// This trims whitespace, replaces multiple spaces with one, lowercases the text,
+// removes a trailing semicolon (if any), and returns the first 80 characters.
+const extractSignature = (queryText: string): string => {
+  let normalized = queryText.trim().replace(/\s+/g, ' ').toLowerCase();
+  if (normalized.endsWith(';')) {
+    normalized = normalized.slice(0, -1);
+  }
+  return normalized.substring(0, 80);
+};
+
 export default function DatabaseDetails() {
   const { id } = useParams();
   const { toast } = useToast();
@@ -58,6 +69,8 @@ export default function DatabaseDetails() {
   const [page, setPage] = useState(1);
   const pageSize = 10;
   const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [continuousKillSignature, setContinuousKillSignature] = useState<string | null>(null);
+  const [isContinuousKilling, setIsContinuousKilling] = useState(false);
 
   const { data: database, isLoading: isLoadingDatabase } = useQuery<SelectDatabaseConnection & {
     instance: {
@@ -204,18 +217,16 @@ export default function DatabaseDetails() {
     mutationFn: async ({ pid }: { pid: number }) => {
       const response = await fetch(`/api/databases/${id}/kill-query`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ pid }),
       });
-
+  
       if (!response.ok) {
         const error = await response.text();
         throw new Error(error);
       }
-
+  
       return response.json();
     },
     onSuccess: () => {
@@ -224,6 +235,7 @@ export default function DatabaseDetails() {
         title: "Query Terminated",
         description: "The query has been successfully terminated",
       });
+      console.log("Kill query request succeeded for PID (see network logs)");
     },
     onError: (error: Error) => {
       toast({
@@ -231,6 +243,7 @@ export default function DatabaseDetails() {
         title: "Failed to terminate query",
         description: error.message,
       });
+      console.error("Kill query request failed:", error);
     },
   });
 
@@ -257,6 +270,39 @@ export default function DatabaseDetails() {
       });
     }
   };
+
+  // When continuous kill mode is active, periodically refetch running queries and kill matching ones.
+  useEffect(() => {
+    if (!isContinuousKilling || !continuousKillSignature) return;
+
+    const intervalId = setInterval(() => {
+      (async () => {
+        try {
+          const result = await refetchQueries();
+          const updatedQueries: RunningQuery[] = result.data || [];
+
+          console.log("Continuous kill check: Target signature:", continuousKillSignature);
+
+          updatedQueries.forEach((query) => {
+            const querySig = extractSignature(query.query);
+            console.log(`Checking query PID ${query.pid} with extracted signature: "${querySig}"`);
+            console.log(`Target signature is: "${continuousKillSignature}"`);
+
+            if (querySig === continuousKillSignature) {
+              console.log(`Exact match found. Attempting to kill query with PID: ${query.pid}`);
+              killQuery({ pid: query.pid });
+            } else {
+              console.log(`No exact match for query PID ${query.pid}.`);
+            }
+          });
+        } catch (error) {
+          console.error("Error in continuous kill effect:", error);
+        }
+      })();
+    }, 2000);
+
+    return () => clearInterval(intervalId);
+  }, [isContinuousKilling, continuousKillSignature, refetchQueries, killQuery]);
 
   if (isLoadingDatabase) {
     return (
@@ -478,6 +524,35 @@ export default function DatabaseDetails() {
                         <RefreshCw className="h-4 w-4" />
                         Refresh
                       </Button>
+                      <Button
+                        variant={isContinuousKilling ? "destructive" : "default"}
+                        size="sm"
+                        onClick={() => {
+                          if (isContinuousKilling) {
+                            setIsContinuousKilling(false);
+                            toast({
+                              title: "Continuous Kill Stopped",
+                              description: "No longer automatically killing matching queries.",
+                            });
+                          } else {
+                            if (continuousKillSignature) {
+                              setIsContinuousKilling(true);
+                              toast({
+                                title: "Continuous Kill Activated",
+                                description: "Matching queries will be killed repeatedly.",
+                              });
+                            } else {
+                              toast({
+                                title: "No target selected",
+                                description: "Please set a running query as target first.",
+                              });
+                            }
+                          }
+                        }}
+                        className="ml-2"
+                      >
+                        {isContinuousKilling ? "Stop Continuous Kill" : "Start Continuous Kill"}
+                      </Button>
                     </div>
                     
                     {queriesError ? (
@@ -510,6 +585,22 @@ export default function DatabaseDetails() {
                                         <span className="text-sm text-muted-foreground whitespace-nowrap">
                                           PID: {query.pid}
                                         </span>
+                                        <Button
+                                          variant="outline"
+                                          size="small"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            const sig = extractSignature(query.query);
+                                            setContinuousKillSignature(sig);
+                                            toast({
+                                              title: "Target Set",
+                                              description: `Continuous kill target set (first 80 chars): "${sig}"`,
+                                            });
+                                          }}
+                                          className="ml-2"
+                                        >
+                                          Set as Target
+                                        </Button>
                                       </div>
                                       <div className="text-left text-sm whitespace-nowrap min-w-[150px]">
                                         <span className="font-medium">Duration:</span>{' '}

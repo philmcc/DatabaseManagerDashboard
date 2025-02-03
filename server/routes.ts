@@ -4,16 +4,26 @@ import { setupAuth } from "./auth";
 import { db } from "@db";
 import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics, clusters, instances, healthCheckQueries, healthCheckExecutions, healthCheckResults, healthCheckReports } from "@db/schema";
 import { eq, and, ne, sql, desc, asc } from "drizzle-orm";
-import pkg from 'pg';
+import pg from 'pg';
 import { z } from "zod";
 import express from 'express';
-const { Client } = pkg;
+
+const { Pool, Client } = pg;
 
 // Update all authentication middleware functions
 function requireAuth(req: Express.Request, res: Express.Response, next: Express.NextFunction) {
+  console.log('Checking authentication:', {
+    isAuthenticated: req.isAuthenticated(),
+    user: req.user,
+    session: req.session
+  });
+  
   if (!req.isAuthenticated()) {
+    console.log('Authentication failed - user not authenticated');
     return res.status(401).json({ error: "Not authenticated" });
   }
+  
+  console.log('Authentication successful for user:', req.user);
   next();
 }
 
@@ -2542,6 +2552,103 @@ export function registerRoutes(app: Express): Server {
     } catch (error) {
       console.error("Error updating cluster settings:", error);
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.get("/api/databases/:id/running-queries", requireAuth, async (req, res) => {
+    const { id } = req.params;
+    console.log(`Fetching running queries for database ${id}`);
+    
+    try {
+      // Get database connection
+      console.log('Getting database connection...');
+      const dbConnection = await db.query.databaseConnections.findFirst({
+        where: (connections, { eq }) => eq(connections.id, parseInt(id)),
+        with: {
+          instance: true
+        }
+      });
+
+      if (!dbConnection) {
+        console.error(`No database found with ID ${id}`);
+        return res.status(404).json({ error: 'Database connection not found' });
+      }
+
+      // Log connection details (excluding password)
+      console.log('Database connection details:', {
+        host: dbConnection.instance.hostname,
+        port: dbConnection.instance.port,
+        database: dbConnection.databaseName,
+        user: dbConnection.username,
+        useSSL: dbConnection.useSSL
+      });
+
+      // Create a new connection pool
+      console.log('Creating connection pool...');
+      const pool = new Pool({
+        host: dbConnection.instance.hostname,
+        port: dbConnection.instance.port,
+        database: dbConnection.databaseName,
+        user: dbConnection.username,
+        password: dbConnection.password,
+        ssl: dbConnection.useSSL ? {
+          rejectUnauthorized: false
+        } : undefined,
+        // Add connection timeout
+        connectionTimeoutMillis: 5000,
+        // Add query timeout
+        statement_timeout: 10000
+      });
+
+      try {
+        // Test connection first
+        console.log('Testing database connection...');
+        await pool.query('SELECT 1');
+        console.log('Connection test successful');
+
+        console.log('Executing query to fetch running queries...');
+        const query = `
+          SELECT 
+            pid,
+            usename as username,
+            datname as database,
+            state,
+            query,
+            EXTRACT(EPOCH FROM now() - query_start)::text || 's' as duration,
+            query_start as started_at
+          FROM pg_stat_activity 
+          WHERE state != 'idle' 
+            AND pid != pg_backend_pid()
+            AND datname = $1
+          ORDER BY query_start DESC
+        `;
+
+        const result = await pool.query(query, [dbConnection.databaseName]);
+        console.log(`Found ${result.rows.length} running queries`);
+        console.log('Query results:', result.rows);
+
+        return res.json(result.rows);
+        
+      } catch (queryError) {
+        console.error('Database query error:', queryError);
+        return res.status(500).json({ 
+          error: 'Database query failed',
+          details: queryError.message 
+        });
+      } finally {
+        // Always close the pool
+        console.log('Closing connection pool...');
+        await pool.end().catch(err => 
+          console.error('Error closing pool:', err)
+        );
+      }
+      
+    } catch (error) {
+      console.error('Error in running-queries endpoint:', error);
+      return res.status(500).json({ 
+        error: 'Failed to fetch running queries',
+        details: error instanceof Error ? error.message : String(error)
+      });
     }
   });
 

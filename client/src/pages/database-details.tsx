@@ -3,12 +3,18 @@ import { Link, useParams } from "wouter";
 import BaseLayout from "@/components/layout/base-layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Database, Activity, Server } from "lucide-react";
+import { Database, Activity, Server, Clock, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { SelectDatabaseConnection, SelectDatabaseOperationLog } from "@db/schema";
 import { useState } from "react";
 import { format } from "date-fns";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 
 interface LogDetails {
   before?: Record<string, any>;
@@ -28,6 +34,22 @@ interface DatabaseLog extends SelectDatabaseOperationLog {
   };
   details: LogDetails;
 }
+
+interface RunningQuery {
+  pid: number;
+  username: string;
+  database: string;
+  state: string;
+  query: string;
+  duration: string;
+  started_at: string;
+}
+
+// Helper function to convert duration string to seconds
+const durationToSeconds = (duration: string): number => {
+  // Duration comes in format "123.456s"
+  return parseFloat(duration.replace('s', ''));
+};
 
 export default function DatabaseDetails() {
   const { id } = useParams();
@@ -50,6 +72,45 @@ export default function DatabaseDetails() {
 
   const { data: logsData, isLoading: isLoadingLogs } = useQuery<{ logs: DatabaseLog[], total: number }>({
     queryKey: [`/api/database-logs?page=${page}&pageSize=${pageSize}&databaseId=${id}`],
+  });
+
+  const { data: runningQueries, refetch: refetchQueries, error: queriesError } = useQuery<RunningQuery[]>({
+    queryKey: [`/api/databases/${id}/running-queries`],
+    refetchInterval: false,
+    queryFn: async ({ queryKey: [url] }) => {
+      console.log('Fetching running queries...');
+      const response = await fetch(url, {
+        credentials: 'include'
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Running queries error response:', {
+          status: response.status,
+          statusText: response.statusText,
+          body: errorText
+        });
+        throw new Error(`Failed to fetch running queries: ${response.status} ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      console.log('Running queries response data:', data);
+      return data;
+    },
+    onError: (error) => {
+      console.error('Error fetching running queries:', error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to fetch running queries"
+      });
+    },
+    onSuccess: (data) => {
+      console.log('Successfully received running queries:', {
+        count: data?.length,
+        data
+      });
+    }
   });
 
   const logs = logsData?.logs || [];
@@ -138,6 +199,30 @@ export default function DatabaseDetails() {
       });
     },
   });
+
+  const handleRefreshQueries = async () => {
+    console.log('Starting query refresh...');
+    try {
+      const result = await refetchQueries();
+      console.log('Refresh completed:', {
+        success: result.isSuccess,
+        data: result.data,
+        error: result.error
+      });
+      
+      toast({
+        title: "Refreshed",
+        description: `Found ${result.data?.length || 0} running queries`,
+      });
+    } catch (error) {
+      console.error('Error refreshing queries:', error);
+      toast({
+        variant: "destructive",
+        title: "Refresh failed",
+        description: error instanceof Error ? error.message : "Failed to refresh running queries",
+      });
+    }
+  };
 
   if (isLoadingDatabase) {
     return (
@@ -328,6 +413,91 @@ export default function DatabaseDetails() {
                 </div>
               </>
             )}
+          </CardContent>
+        </Card>
+
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Clock className="h-5 w-5" />
+              Database Tools
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Accordion type="single" collapsible className="w-full">
+              <AccordionItem value="running-queries">
+                <AccordionTrigger className="hover:no-underline">
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-4 w-4" />
+                    Running Queries
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent>
+                  <div className="pt-4">
+                    <div className="flex justify-end mb-4">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleRefreshQueries}
+                        className="flex items-center gap-2"
+                      >
+                        <RefreshCw className="h-4 w-4" />
+                        Refresh
+                      </Button>
+                    </div>
+                    
+                    {queriesError ? (
+                      <p className="text-center text-red-500">
+                        Error loading queries: {(queriesError as Error).message}
+                      </p>
+                    ) : !runningQueries ? (
+                      <p className="text-center text-muted-foreground">Loading queries...</p>
+                    ) : (
+                      <div className="space-y-4">
+                        {console.log('Rendering running queries:', runningQueries)}
+                        {runningQueries.length === 0 ? (
+                          <p className="text-center text-muted-foreground py-4">
+                            No queries currently running
+                          </p>
+                        ) : (
+                          runningQueries.sort((a, b) => 
+                            durationToSeconds(b.duration) - durationToSeconds(a.duration)
+                          ).map((query, index) => (
+                            <div key={`${query.pid}-${index}`} className="border rounded-lg p-4">
+                              <div className="flex justify-between items-start mb-2">
+                                <div className="space-y-1">
+                                  <div className="flex items-center gap-2">
+                                    <Badge variant="outline">{query.state}</Badge>
+                                    <span className="text-sm text-muted-foreground">
+                                      PID: {query.pid}
+                                    </span>
+                                  </div>
+                                  <p className="text-sm">
+                                    <span className="font-medium">User:</span> {query.username}
+                                  </p>
+                                  <p className="text-sm">
+                                    <span className="font-medium">Duration:</span> {query.duration}
+                                  </p>
+                                  <p className="text-sm">
+                                    <span className="font-medium">Started:</span>{' '}
+                                    {format(new Date(query.started_at), 'PPpp')}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="bg-muted p-3 rounded-md">
+                                <pre className="text-sm overflow-x-auto whitespace-pre-wrap">
+                                  <code>{query.query}</code>
+                                </pre>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
           </CardContent>
         </Card>
       </div>

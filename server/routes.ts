@@ -4,16 +4,26 @@ import { setupAuth } from "./auth";
 import { db } from "@db";
 import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics, clusters, instances, healthCheckQueries, healthCheckExecutions, healthCheckResults, healthCheckReports } from "@db/schema";
 import { eq, and, ne, sql, desc, asc } from "drizzle-orm";
-import pkg from 'pg';
+import pg from 'pg';
 import { z } from "zod";
 import express from 'express';
-const { Client } = pkg;
+
+const { Pool, Client } = pg;
 
 // Update all authentication middleware functions
 function requireAuth(req: Express.Request, res: Express.Response, next: Express.NextFunction) {
+  console.log('Checking authentication:', {
+    isAuthenticated: req.isAuthenticated(),
+    user: req.user,
+    session: req.session
+  });
+  
   if (!req.isAuthenticated()) {
+    console.log('Authentication failed - user not authenticated');
     return res.status(401).json({ error: "Not authenticated" });
   }
+  
+  console.log('Authentication successful for user:', req.user);
   next();
 }
 
@@ -2542,6 +2552,229 @@ export function registerRoutes(app: Express): Server {
     } catch (error) {
       console.error("Error updating cluster settings:", error);
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.get("/api/databases/:id/running-queries", requireAuth, async (req, res) => {
+    const { id } = req.params;
+    console.log(`Fetching running queries for database ${id}`);
+    
+    try {
+      // Get database connection
+      console.log('Getting database connection...');
+      const dbConnection = await db.query.databaseConnections.findFirst({
+        where: (connections, { eq }) => eq(connections.id, parseInt(id)),
+        with: {
+          instance: true
+        }
+      });
+
+      if (!dbConnection) {
+        console.error(`No database found with ID ${id}`);
+        return res.status(404).json({ error: 'Database connection not found' });
+      }
+
+      // Log connection details (excluding password)
+      console.log('Database connection details:', {
+        host: dbConnection.instance.hostname,
+        port: dbConnection.instance.port,
+        database: dbConnection.databaseName,
+        user: dbConnection.username,
+        useSSL: dbConnection.useSSL
+      });
+
+      // Create a new connection pool
+      console.log('Creating connection pool...');
+      const pool = new Pool({
+        host: dbConnection.instance.hostname,
+        port: dbConnection.instance.port,
+        database: dbConnection.databaseName,
+        user: dbConnection.username,
+        password: dbConnection.password,
+        ssl: dbConnection.useSSL ? {
+          rejectUnauthorized: false
+        } : undefined,
+        // Add connection timeout
+        connectionTimeoutMillis: 5000,
+        // Add query timeout
+        statement_timeout: 10000
+      });
+
+      try {
+        // Test connection first
+        console.log('Testing database connection...');
+        await pool.query('SELECT 1');
+        console.log('Connection test successful');
+
+        console.log('Executing query to fetch running queries...');
+        const query = `
+          SELECT 
+            pid,
+            usename as username,
+            datname as database,
+            state,
+            query,
+            EXTRACT(EPOCH FROM now() - query_start)::text || 's' as duration,
+            query_start as started_at
+          FROM pg_stat_activity 
+          WHERE state != 'idle' 
+            AND pid != pg_backend_pid()
+            AND datname = $1
+          ORDER BY query_start DESC
+        `;
+
+        const result = await pool.query(query, [dbConnection.databaseName]);
+        console.log(`Found ${result.rows.length} running queries`);
+        console.log('Query results:', result.rows);
+
+        return res.json(result.rows);
+        
+      } catch (queryError) {
+        console.error('Database query error:', queryError);
+        return res.status(500).json({ 
+          error: 'Database query failed',
+          details: queryError.message 
+        });
+      } finally {
+        // Always close the pool
+        console.log('Closing connection pool...');
+        await pool.end().catch(err => 
+          console.error('Error closing pool:', err)
+        );
+      }
+      
+    } catch (error) {
+      console.error('Error in running-queries endpoint:', error);
+      return res.status(500).json({ 
+        error: 'Failed to fetch running queries',
+        details: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  // Add this endpoint with your other database routes
+  app.post("/api/databases/:id/kill-query", requireAuth, async (req, res) => {
+    const { id } = req.params;
+    const { pid, queryText, action } = req.body;
+    
+    console.log(`Attempting to kill query with PID ${pid} on database ${id}`);
+    console.log('Kill query details:', { queryText, action });
+    
+    try {
+      const dbConnection = await db.query.databaseConnections.findFirst({
+        where: (connections, { eq }) => eq(connections.id, parseInt(id)),
+        with: {
+          instance: true
+        }
+      });
+
+      if (!dbConnection) {
+        console.error(`No database found with ID ${id}`);
+        return res.status(404).json({ error: 'Database connection not found' });
+      }
+
+      const pool = new Pool({
+        host: dbConnection.instance.hostname,
+        port: dbConnection.instance.port,
+        database: dbConnection.databaseName,
+        user: dbConnection.username,
+        password: dbConnection.password,
+        ssl: dbConnection.useSSL ? {
+          rejectUnauthorized: false
+        } : undefined
+      });
+
+      try {
+        // Attempt to kill the query
+        await pool.query('SELECT pg_terminate_backend($1)', [pid]);
+        console.log(`Successfully terminated query with PID ${pid}`);
+        
+        // Only create operation log for manual kills, not continuous kill executions
+        if (action !== 'continuous_kill_execution') {
+          // Create operation log after successful kill
+          await db.insert(databaseOperationLogs).values({
+            databaseId: parseInt(id),
+            userId: req.user.id,
+            operationType: 'kill_query',
+            operationResult: 'success',
+            details: {
+              pid,
+              query: queryText,
+              action
+            }
+          });
+          console.log("Created operation log for kill query");
+        }
+        
+        return res.json({ message: `Query with PID ${pid} has been terminated` });
+      } catch (queryError) {
+        console.error('Error killing query:', queryError);
+        // Only create error log for manual kills, not continuous kill executions
+        if (action !== 'continuous_kill_execution') {
+          // Log the error
+          await db.insert(databaseOperationLogs).values({
+            databaseId: parseInt(id),
+            userId: req.user.id,
+            operationType: 'kill_query',
+            operationResult: 'error',
+            details: {
+              pid,
+              query: queryText,
+              action,
+              error: queryError.message
+            }
+          });
+        }
+        return res.status(500).json({ 
+          error: 'Failed to kill query',
+          details: queryError.message 
+        });
+      } finally {
+        await pool.end();
+      }
+      
+    } catch (error) {
+      console.error('Error in kill-query endpoint:', error);
+      return res.status(500).json({ 
+        error: 'Failed to kill query',
+        details: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  app.post("/api/databases/:id/operation-log", requireAuth, async (req, res) => {
+    console.log("Received operation log request:", {
+      databaseId: req.params.id,
+      body: {
+        ...req.body,
+        details: req.body.details ? JSON.stringify(req.body.details).substring(0, 1000) : null
+      }
+    });
+    
+    try {
+      console.log("Inserting operation log into database...");
+      // Ensure details is serializable and limited in size
+      const sanitizedDetails = typeof req.body.details === 'object' 
+        ? JSON.parse(JSON.stringify(req.body.details)) 
+        : req.body.details;
+
+      const result = await db.insert(databaseOperationLogs).values({
+        databaseId: parseInt(req.params.id),
+        userId: req.user.id,
+        operationType: req.body.operationType,
+        operationResult: req.body.operationResult,
+        details: sanitizedDetails,
+      }).returning('*');
+      
+      console.log("Operation log inserted:", result);
+      
+      return res.json({ success: true });
+    } catch (error) {
+      console.error("Failed to insert operation log:", error);
+      return res.status(500).json({ 
+        error: "Failed to create operation log",
+        details: error instanceof Error ? error.message : String(error)
+      });
     }
   });
 

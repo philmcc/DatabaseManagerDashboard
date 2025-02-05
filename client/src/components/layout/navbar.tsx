@@ -1,7 +1,20 @@
 import React from "react";
-import { NavigationMenu, NavigationMenuItem, NavigationMenuLink, NavigationMenuList } from "@/components/ui/navigation-menu";
+import {
+  NavigationMenu,
+  NavigationMenuItem,
+  NavigationMenuLink,
+  NavigationMenuList,
+} from "@/components/ui/navigation-menu";
 import { Link } from "wouter";
-import { Database, Tags, Home, Activity, Server, Grid, Clock } from "lucide-react";
+import {
+  Database,
+  Tags,
+  Home,
+  Activity,
+  Server,
+  Grid,
+  Clock,
+} from "lucide-react";
 import { useUser } from "@/hooks/use-user";
 
 export default function Navbar() {

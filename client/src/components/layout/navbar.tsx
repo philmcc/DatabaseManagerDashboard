@@ -5,7 +5,9 @@ import {
   NavigationMenuLink,
   NavigationMenuList,
 } from "@/components/ui/navigation-menu";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
 import {
   Database,
   Tags,
@@ -14,15 +16,40 @@ import {
   Server,
   Grid,
   Clock,
+  LogOut,
+  User
 } from "lucide-react";
 import { useUser } from "@/hooks/use-user";
 
 export default function Navbar() {
-  const { user } = useUser();
+  const { user, logout } = useUser();
+  const [, setLocation] = useLocation();
+  const { toast } = useToast();
+
+  const handleLogout = async () => {
+    try {
+      const result = await logout();
+      if (result.ok) {
+        setLocation("/");
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: result.message || "Logout failed",
+        });
+      }
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to logout",
+      });
+    }
+  };
 
   return (
     <nav className="border-b">
-      <div className="px-4 h-14 flex items-center max-w-7xl mx-auto">
+      <div className="px-4 h-14 flex items-center justify-between max-w-7xl mx-auto">
         <NavigationMenu>
           <NavigationMenuList>
             <NavigationMenuItem>
@@ -92,6 +119,19 @@ export default function Navbar() {
             )}
           </NavigationMenuList>
         </NavigationMenu>
+
+        <div className="flex items-center gap-4">
+          <Link href="/profile-settings">
+            <Button variant="outline" size="sm">
+              <User className="mr-1 h-4 w-4" />
+              Profile
+            </Button>
+          </Link>
+          <Button variant="outline" size="sm" onClick={handleLogout}>
+            <LogOut className="mr-1 h-4 w-4" />
+            Logout
+          </Button>
+        </div>
       </div>
     </nav>
   );

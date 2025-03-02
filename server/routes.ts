@@ -10,6 +10,47 @@ import express from 'express';
 
 const { Pool, Client } = pg;
 
+// Remove the problematic import and implement the function directly
+async function getDatabaseConnectionForQueries(databaseId: string) {
+  try {
+    console.log(`Getting database connection details for ID: ${databaseId}`);
+    
+    // Get database connection info from your database
+    const dbConnection = await db.query.databaseConnections.findFirst({
+      where: (connections, { eq }) => eq(connections.id, parseInt(databaseId)),
+      with: {
+        instance: true
+      }
+    });
+
+    if (!dbConnection) {
+      console.error(`No database found with ID ${databaseId}`);
+      throw new Error('Database not found');
+    }
+
+    console.log('Creating connection pool...');
+    // Create a connection pool for the database
+    const client = new Client({
+      host: dbConnection.instance.hostname,
+      port: dbConnection.instance.port,
+      database: dbConnection.databaseName,
+      user: dbConnection.username,
+      password: dbConnection.password,
+      ssl: { rejectUnauthorized: false }
+    });
+
+    // Test the connection
+    console.log('Testing connection...');
+    await client.connect();
+    console.log('Connection successful');
+
+    return client;
+  } catch (error) {
+    console.error('Error getting database connection:', error);
+    throw error;
+  }
+}
+
 // Update all authentication middleware functions
 function requireAuth(req: Express.Request, res: Express.Response, next: Express.NextFunction) {
   console.log('Checking authentication:', {
@@ -2558,97 +2599,46 @@ export function registerRoutes(app: Express): Server {
   app.get("/api/databases/:id/running-queries", requireAuth, async (req, res) => {
     const { id } = req.params;
     console.log(`Fetching running queries for database ${id}`);
+    let client;
     
     try {
-      // Get database connection
+      // Use our local implementation
       console.log('Getting database connection...');
-      const dbConnection = await db.query.databaseConnections.findFirst({
-        where: (connections, { eq }) => eq(connections.id, parseInt(id)),
-        with: {
-          instance: true
-        }
-      });
+      client = await getDatabaseConnectionForQueries(id);
+      
+      console.log('Executing query to fetch running queries...');
+      const query = `
+        SELECT 
+          pid,
+          usename as username,
+          datname as database,
+          state,
+          query,
+          EXTRACT(EPOCH FROM now() - query_start)::text || 's' as duration,
+          query_start as started_at
+        FROM pg_stat_activity 
+        WHERE state != 'idle' 
+          AND pid != pg_backend_pid()
+        ORDER BY query_start DESC
+      `;
 
-      if (!dbConnection) {
-        console.error(`No database found with ID ${id}`);
-        return res.status(404).json({ error: 'Database connection not found' });
-      }
-
-      // Log connection details (excluding password)
-      console.log('Database connection details:', {
-        host: dbConnection.instance.hostname,
-        port: dbConnection.instance.port,
-        database: dbConnection.databaseName,
-        user: dbConnection.username,
-        useSSL: dbConnection.useSSL
-      });
-
-      // Create a new connection pool
-      console.log('Creating connection pool...');
-      const pool = new Pool({
-        host: dbConnection.instance.hostname,
-        port: dbConnection.instance.port,
-        database: dbConnection.databaseName,
-        user: dbConnection.username,
-        password: dbConnection.password,
-        ssl: dbConnection.useSSL ? {
-          rejectUnauthorized: false
-        } : undefined,
-        // Add connection timeout
-        connectionTimeoutMillis: 5000,
-        // Add query timeout
-        statement_timeout: 10000
-      });
-
-      try {
-        // Test connection first
-        console.log('Testing database connection...');
-        await pool.query('SELECT 1');
-        console.log('Connection test successful');
-
-        console.log('Executing query to fetch running queries...');
-        const query = `
-          SELECT 
-            pid,
-            usename as username,
-            datname as database,
-            state,
-            query,
-            EXTRACT(EPOCH FROM now() - query_start)::text || 's' as duration,
-            query_start as started_at
-          FROM pg_stat_activity 
-          WHERE state != 'idle' 
-            AND pid != pg_backend_pid()
-            AND datname = $1
-          ORDER BY query_start DESC
-        `;
-
-        const result = await pool.query(query, [dbConnection.databaseName]);
-        console.log(`Found ${result.rows.length} running queries`);
-        console.log('Query results:', result.rows);
-
-        return res.json(result.rows);
-        
-      } catch (queryError) {
-        console.error('Database query error:', queryError);
-        return res.status(500).json({ 
-          error: 'Database query failed',
-          details: queryError.message 
-        });
-      } finally {
-        // Always close the pool
-        console.log('Closing connection pool...');
-        await pool.end().catch(err => 
-          console.error('Error closing pool:', err)
-        );
-      }
+      const result = await client.query(query);
+      console.log(`Found ${result.rows.length} running queries`);
+      
+      return res.json(result.rows);
       
     } catch (error) {
       console.error('Error in running-queries endpoint:', error);
       return res.status(500).json({ 
         error: 'Failed to fetch running queries',
-        details: error instanceof Error ? error.message : String(error)
+        details: error.message 
       });
+    } finally {
+      // Make sure to close the connection
+      if (client) {
+        console.log('Closing connection...');
+        await client.end().catch(err => console.error('Error closing connection:', err));
+      }
     }
   });
 
@@ -2673,20 +2663,20 @@ export function registerRoutes(app: Express): Server {
         return res.status(404).json({ error: 'Database connection not found' });
       }
 
-      const pool = new Pool({
+      // Use the same connection approach as the test connection endpoint
+      const client = new Client({
         host: dbConnection.instance.hostname,
         port: dbConnection.instance.port,
         database: dbConnection.databaseName,
         user: dbConnection.username,
         password: dbConnection.password,
-        ssl: dbConnection.useSSL ? {
-          rejectUnauthorized: false
-        } : undefined
+        ssl: { rejectUnauthorized: false }
       });
 
       try {
+        await client.connect();
         // Attempt to kill the query
-        await pool.query('SELECT pg_terminate_backend($1)', [pid]);
+        await client.query('SELECT pg_terminate_backend($1)', [pid]);
         console.log(`Successfully terminated query with PID ${pid}`);
         
         // Only create operation log for manual kills, not continuous kill executions
@@ -2730,9 +2720,8 @@ export function registerRoutes(app: Express): Server {
           details: queryError.message 
         });
       } finally {
-        await pool.end();
+        await client.end();
       }
-      
     } catch (error) {
       console.error('Error in kill-query endpoint:', error);
       return res.status(500).json({ 

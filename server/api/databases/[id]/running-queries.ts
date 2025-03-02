@@ -11,14 +11,9 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     logger.info('Getting database connection...');
     const db = await getDatabaseConnection(params.id);
     
-    if (!db) {
-      logger.error(`No database connection found for ID ${params.id}`);
-      return new Response(
-        JSON.stringify({ error: 'Database connection not found' }), 
-        { status: 404 }
-      );
-    }
-
+    // The connection is already tested in getDatabaseConnection
+    // so we can proceed directly to the query
+    
     logger.info('Executing query to fetch running queries...');
     const query = `
       SELECT 

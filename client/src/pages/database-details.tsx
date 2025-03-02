@@ -94,23 +94,28 @@ export default function DatabaseDetails() {
     refetchInterval: false,
     queryFn: async ({ queryKey: [url] }) => {
       console.log('Fetching running queries...');
-      const response = await fetch(url, {
-        credentials: 'include'
-      });
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Running queries error response:', {
-          status: response.status,
-          statusText: response.statusText,
-          body: errorText
+      try {
+        const response = await fetch(`/api/databases/${id}/running-queries`, {
+          credentials: 'include'
         });
-        throw new Error(`Failed to fetch running queries: ${response.status} ${response.statusText}`);
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('Running queries error response:', {
+            status: response.status,
+            statusText: response.statusText,
+            body: errorText
+          });
+          throw new Error(`Failed to fetch running queries: ${response.status} ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        console.log('Running queries response data:', data);
+        return data;
+      } catch (error) {
+        console.error('Error in query function:', error);
+        throw error;
       }
-      
-      const data = await response.json();
-      console.log('Running queries response data:', data);
-      return data;
     },
     onError: (error) => {
       console.error('Error fetching running queries:', error);

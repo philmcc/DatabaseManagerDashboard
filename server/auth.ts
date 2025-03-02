@@ -7,7 +7,7 @@ import { scrypt, randomBytes, timingSafeEqual } from "crypto";
 import { promisify } from "util";
 import { users, insertUserSchema, type SelectUser } from "@db/schema";
 import { db } from "@db";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, and } from "drizzle-orm";
 import nodemailer from "nodemailer";
 import { randomUUID } from "crypto";
 
@@ -72,30 +72,20 @@ export function setupAuth(app: Express) {
   passport.use(
     new LocalStrategy(async (username, password, done) => {
       try {
-        const result = await db
-          .select({
-            id: users.id,
-            username: users.username,
-            password: users.password,
-            role: users.role,
-          })
+        const [user] = await db
+          .select()
           .from(users)
           .where(eq(users.username, username))
           .limit(1);
 
-        if (!result.length) {
+        if (!user) {
           return done(null, false, { message: "Incorrect username." });
         }
-        const user = result[0];
         const isMatch = await crypto.compare(password, user.password);
         if (!isMatch) {
           return done(null, false, { message: "Incorrect password." });
         }
-        return done(null, {
-          id: user.id,
-          username: user.username,
-          role: user.role,
-        });
+        return done(null, user);
       } catch (err) {
         return done(err);
       }
@@ -109,12 +99,7 @@ export function setupAuth(app: Express) {
   passport.deserializeUser(async (id: number, done) => {
     try {
       const [user] = await db
-        .select({
-          id: users.id,
-          username: users.username,
-          role: users.role,
-          isApproved: users.isApproved,
-        })
+        .select()
         .from(users)
         .where(eq(users.id, id))
         .limit(1);
@@ -236,5 +221,133 @@ export function setupAuth(app: Express) {
     }
 
     res.status(401).send("Not logged in");
+  });
+
+  app.post("/api/forgot-password", async (req, res) => {
+    try {
+      console.log("Forgot password request received:", req.body);
+      const { username } = req.body;
+      
+      if (!username) {
+        return res.status(400).send("Email is required");
+      }
+
+      // Find the user
+      const [user] = await db
+        .select()
+        .from(users)
+        .where(eq(users.username, username))
+        .limit(1);
+
+      // Don't reveal if user exists or not for security
+      if (!user) {
+        console.log("User not found, but returning success for security");
+        return res.status(200).send("If an account exists with that email, you will receive reset instructions.");
+      }
+
+      // Generate reset token and set expiry (24 hours from now)
+      const resetToken = randomUUID();
+      const resetTokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+      console.log(`Generated reset token for user ${user.id}: ${resetToken}`);
+
+      // Update user with reset token
+      await db
+        .update(users)
+        .set({
+          resetToken,
+          resetTokenExpiry,
+        })
+        .where(eq(users.id, user.id));
+
+      // Check if email configuration is available
+      if (!process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
+        console.log("Email configuration missing, skipping email send");
+        // For development, log the reset URL
+        const resetUrl = `${process.env.APP_URL || 'http://localhost:3000'}/reset-password#${resetToken}`;
+        console.log(`Reset URL (would be emailed): ${resetUrl}`);
+        
+        return res.status(200).send("If an account exists with that email, you will receive reset instructions.");
+      }
+
+      // Create reset URL with token in hash
+      const resetUrl = `${process.env.APP_URL || 'http://localhost:3000'}/reset-password#${resetToken}`;
+
+      try {
+        // Send email with reset link
+        await transporter.sendMail({
+          from: process.env.EMAIL_USER,
+          to: user.username,
+          subject: "Password Reset Request",
+          text: `You requested a password reset. Please use the following link to reset your password: ${resetUrl}`,
+          html: `
+            <p>You requested a password reset.</p>
+            <p>Please use the following link to reset your password:</p>
+            <a href="${resetUrl}">Reset Password</a>
+            <p>This link will expire in 24 hours.</p>
+            <p>If you didn't request this, please ignore this email.</p>
+          `,
+        });
+        console.log(`Reset email sent to ${user.username}`);
+      } catch (emailError) {
+        console.error("Error sending reset email:", emailError);
+        // Don't fail the request if email sending fails
+        // Just log it and continue
+      }
+
+      res.status(200).send("If an account exists with that email, you will receive reset instructions.");
+    } catch (error) {
+      console.error("Password reset request error:", error);
+      res.status(500).send("Error processing password reset request");
+    }
+  });
+
+  app.post("/api/reset-password", async (req, res) => {
+    try {
+      console.log("Reset password request received:", req.body);
+      const { token, password } = req.body;
+      
+      if (!token || !password) {
+        return res.status(400).send("Token and password are required");
+      }
+
+      // Find user with this reset token and valid expiry
+      const [user] = await db
+        .select()
+        .from(users)
+        .where(
+          and(
+            eq(users.resetToken, token),
+            sql`${users.resetTokenExpiry} > NOW()`
+          )
+        )
+        .limit(1);
+
+      if (!user) {
+        console.log("Invalid or expired reset token");
+        return res.status(400).send("Invalid or expired reset token");
+      }
+
+      console.log(`Valid reset token for user ${user.id}`);
+
+      // Hash the new password
+      const hashedPassword = await crypto.hash(password);
+
+      // Update user with new password and clear reset token
+      await db
+        .update(users)
+        .set({
+          password: hashedPassword,
+          resetToken: null,
+          resetTokenExpiry: null,
+        })
+        .where(eq(users.id, user.id));
+
+      console.log(`Password reset successful for user ${user.id}`);
+      res.status(200).send("Password has been reset successfully");
+    } catch (error) {
+      console.error("Password reset error:", error);
+      res.status(500).send("Error resetting password");
+    }
   });
 }

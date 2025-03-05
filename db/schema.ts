@@ -62,6 +62,13 @@ export const instances = pgTable("instances", {
   userId: integer("userId").notNull().references(() => users.id, { onDelete: 'cascade' }),
   createdAt: timestamp("createdAt").defaultNow(),
   updatedAt: timestamp("updatedAt").defaultNow(),
+  useSSHTunnel: boolean("use_ssh_tunnel").default(false).notNull(),
+  sshHost: text("ssh_host"),
+  sshPort: integer("ssh_port").default(22),
+  sshUsername: text("ssh_username"),
+  sshPassword: text("ssh_password"),
+  sshPrivateKey: text("ssh_private_key"),
+  sshKeyPassphrase: text("ssh_key_passphrase"),
 });
 
 export const databaseConnections = pgTable("database_connections", {
@@ -76,6 +83,13 @@ export const databaseConnections = pgTable("database_connections", {
   updatedAt: timestamp("updatedAt").defaultNow(),
   archived: boolean("archived").default(false).notNull(),
   linkedDatabaseId: integer("linked_database_id").references(() => databaseConnections.id),
+  useSSHTunnel: boolean("use_ssh_tunnel").default(false).notNull(),
+  sshHost: text("ssh_host"),
+  sshPort: integer("ssh_port").default(22),
+  sshUsername: text("ssh_username"),
+  sshPassword: text("ssh_password"),
+  sshPrivateKey: text("ssh_private_key"),
+  sshKeyPassphrase: text("ssh_key_passphrase"),
 });
 
 export const tags = pgTable("tags", {

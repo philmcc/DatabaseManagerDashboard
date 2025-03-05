@@ -7,49 +7,11 @@ import { eq, and, ne, sql, desc, asc } from "drizzle-orm";
 import pg from 'pg';
 import { z } from "zod";
 import express from 'express';
+import { SSHTunnel } from "./lib/ssh-tunnel";
+import { getInstanceConnection, getDatabaseConnection } from "./lib/database";
+import { logger } from "./lib/logger";
 
 const { Pool, Client } = pg;
-
-// Remove the problematic import and implement the function directly
-async function getDatabaseConnectionForQueries(databaseId: string) {
-  try {
-    console.log(`Getting database connection details for ID: ${databaseId}`);
-    
-    // Get database connection info from your database
-    const dbConnection = await db.query.databaseConnections.findFirst({
-      where: (connections, { eq }) => eq(connections.id, parseInt(databaseId)),
-      with: {
-        instance: true
-      }
-    });
-
-    if (!dbConnection) {
-      console.error(`No database found with ID ${databaseId}`);
-      throw new Error('Database not found');
-    }
-
-    console.log('Creating connection pool...');
-    // Create a connection pool for the database
-    const client = new Client({
-      host: dbConnection.instance.hostname,
-      port: dbConnection.instance.port,
-      database: dbConnection.databaseName,
-      user: dbConnection.username,
-      password: dbConnection.password,
-      ssl: { rejectUnauthorized: false }
-    });
-
-    // Test the connection
-    console.log('Testing connection...');
-    await client.connect();
-    console.log('Connection successful');
-
-    return client;
-  } catch (error) {
-    console.error('Error getting database connection:', error);
-    throw error;
-  }
-}
 
 // Update all authentication middleware functions
 function requireAuth(req: Express.Request, res: Express.Response, next: Express.NextFunction) {
@@ -87,6 +49,24 @@ function requireWriterOrAdmin(req: Express.Request, res: Express.Response, next:
     next();
   });
 }
+
+// Add at the top of your route
+const instanceSchema = z.object({
+  hostname: z.string().min(1, "Hostname is required"),
+  port: z.number().int().min(1).max(65535),
+  username: z.string().min(1, "Username is required"),
+  password: z.string().min(1, "Password is required"),
+  description: z.string().optional(),
+  isWriter: z.boolean().optional(),
+  defaultDatabaseName: z.string().optional(),
+  useSSHTunnel: z.boolean().optional(),
+  sshHost: z.string().optional(),
+  sshPort: z.number().optional(),
+  sshUsername: z.string().optional(),
+  sshPassword: z.string().optional(),
+  sshPrivateKey: z.string().optional(),
+  sshKeyPassphrase: z.string().optional(),
+});
 
 export function registerRoutes(app: Express): Server {
   app.use(express.json());
@@ -715,70 +695,112 @@ export function registerRoutes(app: Express): Server {
   });
 
   // Add instance creation route
-  app.post("/api/clusters/:clusterId/instances", requireWriterOrAdmin, async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).send("Not authenticated");
-    }
-
+  app.post("/api/clusters/:clusterId/instances", requireAuth, async (req, res) => {
     try {
-      const { clusterId } = req.params;
-      const { hostname, port, username, password, description, isWriter, defaultDatabaseName } = req.body;
-
-      // Test connection first
-      const client = new Client({
-        host: hostname,
-        port,
-        user: username,
-        password,
-        database: defaultDatabaseName || 'postgres',
-        ssl: { rejectUnauthorized: false }
+      console.log('Creating instance for cluster:', req.params.clusterId, {
+        hostname: req.body.hostname,
+        port: req.body.port,
+        useSSH: req.body.useSSHTunnel
       });
 
+      let client;
+      let tunnel;
+
       try {
+        // Use the same SSH tunnel logic as the test connection endpoint
+        if (req.body.useSSHTunnel) {
+          // Set up SSH tunnel
+          tunnel = new SSHTunnel({
+            sshHost: req.body.sshHost!,
+            sshPort: req.body.sshPort || 22,
+            sshUsername: req.body.sshUsername!,
+            sshPassword: req.body.sshPassword,
+            sshPrivateKey: req.body.sshPrivateKey,
+            sshKeyPassphrase: req.body.sshKeyPassphrase,
+            dbHost: req.body.hostname,
+            dbPort: req.body.port
+          });
+
+          // Connect tunnel
+          const localPort = await tunnel.connect();
+          console.log('SSH tunnel established on port:', localPort);
+
+          // Create client that connects through tunnel
+          client = new Client({
+            host: 'localhost',
+            port: localPort,
+            user: req.body.username,
+            password: req.body.password,
+            database: req.body.defaultDatabaseName || 'postgres',
+            ssl: { rejectUnauthorized: false }
+          });
+        } else {
+          // Direct connection
+          client = new Client({
+            host: req.body.hostname,
+            port: req.body.port,
+            user: req.body.username,
+            password: req.body.password,
+            database: req.body.defaultDatabaseName || 'postgres',
+            ssl: { rejectUnauthorized: false }
+          });
+        }
+
+        // Test the connection
         await client.connect();
+        await client.query('SELECT 1'); // Verify we can actually query
         await client.end();
-      } catch (error: any) {
+
+        // If connection test passed, create the instance
+        const result = await db.insert(instances).values({
+          hostname: req.body.hostname,
+          port: req.body.port,
+          username: req.body.username,
+          password: req.body.password,
+          description: req.body.description,
+          isWriter: req.body.isWriter,
+          defaultDatabaseName: req.body.defaultDatabaseName,
+          clusterId: parseInt(req.params.clusterId),
+          userId: req.user.id,
+          useSSHTunnel: req.body.useSSHTunnel || false,
+          sshHost: req.body.sshHost,
+          sshPort: req.body.sshPort,
+          sshUsername: req.body.sshUsername,
+          sshPassword: req.body.sshPassword,
+          sshPrivateKey: req.body.sshPrivateKey,
+          sshKeyPassphrase: req.body.sshKeyPassphrase,
+        }).returning();
+
+        res.json(result[0]);
+      } catch (connError) {
+        console.error('Connection test failed:', connError);
         return res.status(400).json({
           message: "Failed to connect to database instance",
-          error: error.message,
+          error: connError.message,
+          details: {
+            host: req.body.hostname,
+            port: req.body.port,
+            database: req.body.defaultDatabaseName || 'postgres'
+          }
         });
+      } finally {
+        if (client) {
+          try {
+            await client.end();
+          } catch (err) {
+            console.error('Error closing client:', err);
+          }
+        }
+        if (tunnel) {
+          tunnel.close();
+        }
       }
-
-      // If connection test passed, create the instance
-      const [newInstance] = await db
-        .insert(instances)
-        .values({
-          hostname,
-          port,
-          username,
-          password,
-          description,
-          isWriter,
-          defaultDatabaseName,
-          clusterId: parseInt(clusterId),
-          userId: req.user.id,
-        })
-        .returning();
-
-      // If this is a writer instance, update other instances in the cluster to be readers
-      if (isWriter) {
-        await db
-          .update(instances)
-          .set({ isWriter: false })
-          .where(
-            and(
-              eq(instances.clusterId, parseInt(clusterId)),
-              ne(instances.id, newInstance.id)
-            )
-          );
-      }
-
-      res.json(newInstance);
     } catch (error) {
-      console.error("Instance creation error:", error);
+      console.error('Error creating instance:', error);
       res.status(500).json({
-        message: "Error creating instance",
-        error: error instanceof Error ? error.message : String(error),
+        message: "Failed to create instance",
+        error: error.message,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
       });
     }
   });
@@ -2220,19 +2242,20 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
-  // Change the existing test endpoint to handle both existing and new connections
-  app.post("/api/test-connection", requireAuth, async (req, res) => {
+  // Update the test connection endpoint to support SSH tunneling
+  app.post("/api/test-connection", async (req, res) => {
     try {
       if (!req.is('application/json')) {
         return res.status(400).json({ message: "Invalid content type" });
       }
 
-      const { instanceId, username, password, databaseName } = req.body;
+      const { instanceId, username, password, databaseName, useSSHTunnel, sshHost, sshPort, sshUsername, sshPassword, sshPrivateKey, sshKeyPassphrase } = req.body;
 
       if (!instanceId || !username || !password || !databaseName) {
         return res.status(400).json({ message: "Missing required fields" });
       }
 
+      // Get instance details
       const [instance] = await db
         .select()
         .from(instances)
@@ -2243,24 +2266,68 @@ export function registerRoutes(app: Express): Server {
         return res.status(404).json({ message: "Instance not found" });
       }
 
-      const client = new Client({
-        host: instance.hostname,
-        port: instance.port,
-        user: username,
-        password,
-        database: databaseName,
-        ssl: { rejectUnauthorized: false }
-      });
-
+      // Determine connection method
+      let client;
+      let tunnel;
+      
       try {
+        if (useSSHTunnel) {
+          // Additional validation for SSH tunnel parameters
+          if (!sshHost || !sshUsername || !(sshPassword || sshPrivateKey)) {
+            return res.status(400).json({ message: "Missing required SSH tunnel parameters" });
+          }
+
+          // Set up SSH tunnel
+          tunnel = new SSHTunnel({
+            sshHost,
+            sshPort: sshPort || 22,
+            sshUsername,
+            sshPassword,
+            sshPrivateKey,
+            sshKeyPassphrase,
+            dbHost: instance.hostname,
+            dbPort: instance.port
+          });
+          
+          // Connect the tunnel
+          const localPort = await tunnel.connect();
+          
+          // Create client that connects through tunnel
+          client = new Client({
+            host: 'localhost',
+            port: localPort,
+            user: username,
+            password,
+            database: databaseName,
+            ssl: { rejectUnauthorized: false }
+          });
+        } else {
+          // Direct connection
+          client = new Client({
+            host: instance.hostname,
+            port: instance.port,
+            user: username,
+            password,
+            database: databaseName,
+            ssl: { rejectUnauthorized: false }
+          });
+        }
+
+        // Test the connection
         await client.connect();
         await client.end();
+        
         res.json({ message: "Connection successful" });
-      } catch (error: any) {
+      } catch (error) {
         res.status(400).json({
           message: "Connection failed",
           error: error.message,
         });
+      } finally {
+        // Clean up resources
+        if (tunnel) {
+          tunnel.close();
+        }
       }
     } catch (error) {
       console.error("Connection test error:", error);
@@ -2450,114 +2517,85 @@ export function registerRoutes(app: Express): Server {
   });
 
   // Add a new scanning endpoint for instances
-  app.post("/api/instances/:id/scan", requireWriterOrAdmin, async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.status(401).send("Not authenticated");
-    }
+  app.post("/api/instances/:id/scan", requireAuth, async (req, res) => {
     try {
-      const { id } = req.params;
-      const instanceId = parseInt(id);
+      const instanceId = parseInt(req.params.id);
+      logger.info(`Starting database scan for instance ${instanceId}`);
+      
+      // Get connection with SSH tunnel support
+      const { connection: client, cleanup } = await getInstanceConnection(instanceId);
+      
+      try {
+        logger.info('Connecting to database...');
+        await client.connect();
+        
+        // Get all non-template databases
+        logger.info('Querying for databases...');
+        const result = await client.query(`
+          SELECT datname 
+          FROM pg_database 
+          WHERE datistemplate = false 
+            AND datname != 'postgres' 
+            AND datname != 'template0' 
+            AND datname != 'template1'
+          ORDER BY datname;
+        `);
+        
+        const databases = result.rows.map(row => row.datname);
+        logger.info(`Found ${databases.length} databases`);
 
-      // Retrieve the instance record
-      const [instance] = await db
-        .select()
-        .from(instances)
-        .where(eq(instances.id, instanceId))
-        .limit(1);
+        // Get the instance details for updating database records
+        const instance = await db.query.instances.findFirst({
+          where: (instances, { eq }) => eq(instances.id, instanceId)
+        });
 
-      if (!instance) {
-        return res.status(404).json({ message: "Instance not found" });
-      }
-
-      // Connect to the instance using its superuser credentials
-      const client = new Client({
-        host: instance.hostname,
-        port: instance.port,
-        user: instance.username, // superuser credentials saved on instance
-        password: instance.password,
-        database: instance.defaultDatabaseName || "postgres", // use a default database (or override)
-        ssl: { rejectUnauthorized: false }
-      });
-      await client.connect();
-
-      // Retrieve all databases from the instance
-      const { rows } = await client.query("SELECT datname FROM pg_database;");
-      await client.end();
-
-      // Create a set of scanned database names
-      const scannedNames = rows.map(row => row.datname);
-
-      // Get all databaseConnections for this instance (including archived ones)
-      const existingDatabases = await db.query.databaseConnections.findMany({
-        where: eq(databaseConnections.instanceId, instanceId)
-      });
-
-      // For each scanned database, if it doesn't exist in our records, add it.
-      for (const dbName of scannedNames) {
-        const exists = existingDatabases.find(dbRec => dbRec.databaseName === dbName);
-        if (!exists) {
-          await db.insert(databaseConnections).values({
-            name: dbName,
-            instanceId: instanceId,
-            username: instance.username,
-            password: instance.password,
-            databaseName: dbName,
-            userId: req.user.id,
-            archived: false,
-          });
-        } else {
-          // If it exists, ensure it is marked active (not archived)
-          await db.update(databaseConnections)
-            .set({ archived: false })
-            .where(eq(databaseConnections.id, exists.id));
+        if (!instance) {
+          throw new Error('Instance not found');
         }
-      }
 
-      // Mark databases that exist in our records but were not found during the scan as archived.
-      for (const dbRec of existingDatabases) {
-        if (!scannedNames.includes(dbRec.databaseName) && !dbRec.archived) {
-          await db.update(databaseConnections)
-            .set({ archived: true })
-            .where(eq(databaseConnections.id, dbRec.id));
-        }
-      }
-
-      // For reader instances, update the linkedDatabaseId based on the writer record in the same cluster.
-      // (Assumes that only one writer exists per cluster.)
-      if (!instance.isWriter) {
-        // Find the writer instance from the same cluster.
-        const [writerInstance] = await db
-          .select()
-          .from(instances)
-          .where(and(
-            eq(instances.clusterId, instance.clusterId),
-            eq(instances.isWriter, true)
-          ))
-          .limit(1);
-        if (writerInstance) {
-          // For each database on this instance, find matching writer record (by databaseName) and update linkage.
-          const readerDatabases = await db.query.databaseConnections.findMany({
-            where: eq(databaseConnections.instanceId, instanceId)
+        // Update database records
+        for (const dbName of databases) {
+          const existingDb = await db.query.databaseConnections.findFirst({
+            where: (connections, { and, eq }) => and(
+              eq(connections.instanceId, instanceId),
+              eq(connections.databaseName, dbName)
+            )
           });
-          for (const rec of readerDatabases) {
-            const writerDb = await db.query.databaseConnections.findFirst({
-              where: and(
-                eq(databaseConnections.instanceId, writerInstance.id),
-                eq(databaseConnections.databaseName, rec.databaseName)
-              )
+
+          if (!existingDb) {
+            // Create new database record
+            await db.insert(databaseConnections).values({
+              name: dbName,
+              instanceId: instanceId,
+              username: instance.username,
+              password: instance.password,
+              databaseName: dbName,
+              userId: req.user.id,
+              useSSHTunnel: instance.useSSHTunnel,
+              sshHost: instance.sshHost,
+              sshPort: instance.sshPort,
+              sshUsername: instance.sshUsername,
+              sshPassword: instance.sshPassword,
+              sshPrivateKey: instance.sshPrivateKey,
+              sshKeyPassphrase: instance.sshKeyPassphrase
             });
-            if (writerDb) {
-              await db.update(databaseConnections)
-                .set({ linkedDatabaseId: writerDb.id })
-                .where(eq(databaseConnections.id, rec.id));
-            }
+            logger.info(`Created new database record for ${dbName}`);
           }
         }
-      }
 
-      res.json({ message: "Database scan complete", scanned: scannedNames });
+        res.json(databases);
+      } catch (error) {
+        logger.error('Database scan error:', error);
+        res.status(500).json({
+          message: "Error scanning databases",
+          error: error instanceof Error ? error.message : String(error)
+        });
+      } finally {
+        logger.info('Cleaning up database connection...');
+        await cleanup();
+      }
     } catch (error) {
-      console.error("Instance scan error:", error);
+      logger.error('Error in scan endpoint:', error);
       res.status(500).json({
         message: "Error scanning instance",
         error: error instanceof Error ? error.message : String(error)
@@ -2597,47 +2635,43 @@ export function registerRoutes(app: Express): Server {
   });
 
   app.get("/api/databases/:id/running-queries", requireAuth, async (req, res) => {
-    const { id } = req.params;
-    console.log(`Fetching running queries for database ${id}`);
-    let client;
+    let connection;
+    let cleanup;
     
     try {
-      // Use our local implementation
-      console.log('Getting database connection...');
-      client = await getDatabaseConnectionForQueries(id);
+      const databaseId = parseInt(req.params.id);
+      logger.info(`Getting running queries for database ${databaseId}`);
       
-      console.log('Executing query to fetch running queries...');
-      const query = `
-        SELECT 
-          pid,
-          usename as username,
-          datname as database,
-          state,
-          query,
-          EXTRACT(EPOCH FROM now() - query_start)::text || 's' as duration,
-          query_start as started_at
+      // Use our unified connection helper with the correct function
+      ({ connection, cleanup } = await getDatabaseConnection(databaseId));
+      
+      await connection.connect();
+      
+      const result = await connection.query(`
+        SELECT pid, 
+               usename, 
+               application_name,
+               client_addr,
+               backend_start,
+               query_start,
+               state,
+               query
         FROM pg_stat_activity 
         WHERE state != 'idle' 
           AND pid != pg_backend_pid()
-        ORDER BY query_start DESC
-      `;
+        ORDER BY query_start DESC;
+      `);
 
-      const result = await client.query(query);
-      console.log(`Found ${result.rows.length} running queries`);
-      
-      return res.json(result.rows);
-      
+      res.json(result.rows);
     } catch (error) {
-      console.error('Error in running-queries endpoint:', error);
-      return res.status(500).json({ 
-        error: 'Failed to fetch running queries',
-        details: error.message 
+      logger.error('Error in running-queries endpoint:', error);
+      res.status(500).json({
+        message: "Error fetching running queries",
+        error: error instanceof Error ? error.message : String(error)
       });
     } finally {
-      // Make sure to close the connection
-      if (client) {
-        console.log('Closing connection...');
-        await client.end().catch(err => console.error('Error closing connection:', err));
+      if (cleanup) {
+        await cleanup();
       }
     }
   });
@@ -2764,6 +2798,206 @@ export function registerRoutes(app: Express): Server {
         error: "Failed to create operation log",
         details: error instanceof Error ? error.message : String(error)
       });
+    }
+  });
+
+  // Update the test connection endpoint
+  app.post("/api/instances/test-connection", requireAuth, async (req, res) => {
+    try {
+      // Log the attempt (without sensitive data)
+      console.log('Testing connection to:', {
+        host: req.body.hostname,
+        port: req.body.port,
+        database: req.body.defaultDatabaseName || 'postgres',
+        useSSH: req.body.useSSHTunnel
+      });
+
+      let client;
+      let tunnel;
+
+      try {
+        if (req.body.useSSHTunnel) {
+          // Set up SSH tunnel
+          tunnel = new SSHTunnel({
+            sshHost: req.body.sshHost!,
+            sshPort: req.body.sshPort || 22,
+            sshUsername: req.body.sshUsername!,
+            sshPassword: req.body.sshPassword,
+            sshPrivateKey: req.body.sshPrivateKey,
+            sshKeyPassphrase: req.body.sshKeyPassphrase,
+            dbHost: req.body.hostname,
+            dbPort: req.body.port
+          });
+
+          // Connect tunnel
+          const localPort = await tunnel.connect();
+          console.log('SSH tunnel established on port:', localPort);
+
+          // Create client that connects through tunnel
+          client = new Client({
+            host: 'localhost',
+            port: localPort,
+            user: req.body.username,
+            password: req.body.password,
+            database: req.body.defaultDatabaseName || 'postgres',
+            ssl: { rejectUnauthorized: false }
+          });
+        } else {
+          // Direct connection
+          client = new Client({
+            host: req.body.hostname,
+            port: req.body.port,
+            user: req.body.username,
+            password: req.body.password,
+            database: req.body.defaultDatabaseName || 'postgres',
+            ssl: { rejectUnauthorized: false }
+          });
+        }
+
+        // Test the connection
+        await client.connect();
+        await client.query('SELECT 1'); // Verify we can actually query
+        await client.end();
+
+        res.json({ message: "Connection successful" });
+      } catch (error) {
+        console.error('Connection test failed:', error);
+        res.status(400).json({
+          message: "Connection failed",
+          error: error.message
+        });
+      } finally {
+        if (client) {
+          try {
+            await client.end();
+          } catch (err) {
+            console.error('Error closing client:', err);
+          }
+        }
+        if (tunnel) {
+          tunnel.close();
+        }
+      }
+    } catch (error) {
+      console.error('Test connection error:', error);
+      res.status(500).json({
+        message: "Error testing connection",
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  app.post("/api/health-checks/:id/execute", requireAuth, async (req, res) => {
+    let connection;
+    let cleanup;
+    
+    try {
+      const healthCheck = await db.query.healthCheckQueries.findFirst({
+        where: (checks, { eq }) => eq(checks.id, parseInt(req.params.id)),
+        with: {
+          database: true
+        }
+      });
+
+      if (!healthCheck) {
+        return res.status(404).json({ message: "Health check not found" });
+      }
+
+      // Use unified connection helper
+      ({ connection, cleanup } = await getDatabaseConnection(healthCheck.databaseId));
+      
+      await connection.connect();
+      const startTime = Date.now();
+      const result = await connection.query(healthCheck.query);
+      const duration = Date.now() - startTime;
+
+      // Record the execution
+      await db.insert(healthCheckExecutions).values({
+        healthCheckId: healthCheck.id,
+        executedAt: new Date(),
+        duration: duration,
+        success: true,
+        resultData: result.rows
+      });
+
+      res.json({
+        success: true,
+        duration,
+        result: result.rows
+      });
+    } catch (error) {
+      logger.error('Health check execution error:', error);
+      res.status(500).json({
+        message: "Error executing health check",
+        error: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      if (cleanup) {
+        await cleanup();
+      }
+    }
+  });
+
+  app.post("/api/databases/:id/collect-metrics", requireAuth, async (req, res) => {
+    let connection;
+    let cleanup;
+    
+    try {
+      const databaseId = parseInt(req.params.id);
+      
+      // Use unified connection helper
+      ({ connection, cleanup } = await getDatabaseConnection(databaseId));
+      
+      await connection.connect();
+
+      // Get database size
+      const sizeResult = await connection.query(`
+        SELECT pg_size_pretty(pg_database_size(current_database())) as size,
+               pg_database_size(current_database()) as raw_size
+      `);
+
+      // Get active connections
+      const connectionsResult = await connection.query(`
+        SELECT count(*) as count 
+        FROM pg_stat_activity 
+        WHERE state != 'idle'
+      `);
+
+      // Get cache hit ratio
+      const cacheResult = await connection.query(`
+        SELECT 
+          sum(heap_blks_hit) / (sum(heap_blks_hit) + sum(heap_blks_read)) as ratio
+        FROM pg_statio_user_tables
+      `);
+
+      // Get average query time
+      const queryTimeResult = await connection.query(`
+        SELECT avg(total_exec_time) as avg_time
+        FROM pg_stat_statements
+        WHERE calls > 0
+      `);
+
+      // Insert metrics
+      await db.insert(databaseMetrics).values({
+        databaseId: databaseId,
+        activeConnections: parseInt(connectionsResult.rows[0].count),
+        databaseSize: sizeResult.rows[0].size,
+        rawDatabaseSize: sizeResult.rows[0].raw_size,
+        cacheHitRatio: parseFloat(cacheResult.rows[0].ratio || '0'),
+        avgQueryTime: parseFloat(queryTimeResult.rows[0].avg_time || '0'),
+      });
+
+      res.json({ message: "Metrics collected successfully" });
+    } catch (error) {
+      logger.error('Error collecting metrics:', error);
+      res.status(500).json({
+        message: "Error collecting metrics",
+        error: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      if (cleanup) {
+        await cleanup();
+      }
     }
   });
 

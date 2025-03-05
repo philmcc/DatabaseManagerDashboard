@@ -2,7 +2,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,6 +13,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Database } from "lucide-react";
 import { SelectDatabaseConnection, SelectInstance, SelectTag } from "@db/schema";
 import { useEffect, useState } from "react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 
 const formSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -21,6 +24,13 @@ const formSchema = z.object({
   password: z.string().min(1, "Password is required"),
   databaseName: z.string().min(1, "Database name is required"),
   tags: z.array(z.coerce.number()).default([]),
+  useSSHTunnel: z.boolean().default(false),
+  sshHost: z.string().optional(),
+  sshPort: z.coerce.number().default(22),
+  sshUsername: z.string().optional(),
+  sshPassword: z.string().optional(),
+  sshPrivateKey: z.string().optional(),
+  sshKeyPassphrase: z.string().optional(),
 });
 
 type FormData = z.infer<typeof formSchema>;
@@ -63,6 +73,13 @@ export default function DatabaseForm() {
         password: existingDatabase.password,
         databaseName: existingDatabase.databaseName,
         tags: existingDatabase.tags?.map(t => t.tagId) || [],
+        useSSHTunnel: existingDatabase.useSSHTunnel || false,
+        sshHost: existingDatabase.sshHost || "",
+        sshPort: existingDatabase.sshPort || 22,
+        sshUsername: existingDatabase.sshUsername || "",
+        sshPassword: existingDatabase.sshPassword || "",
+        sshPrivateKey: existingDatabase.sshPrivateKey || "",
+        sshKeyPassphrase: existingDatabase.sshKeyPassphrase || "",
       });
     }
   }, [existingDatabase, form]);
@@ -386,6 +403,191 @@ export default function DatabaseForm() {
                     </FormItem>
                   )}
                 />
+
+                <div className="mt-4">
+                  <FormField
+                    control={form.control}
+                    name="useSSHTunnel"
+                    render={({ field }) => (
+                      <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
+                        <FormControl>
+                          <Checkbox
+                            checked={field.value}
+                            onCheckedChange={field.onChange}
+                          />
+                        </FormControl>
+                        <div className="space-y-1 leading-none">
+                          <FormLabel>
+                            Connect via SSH Tunnel
+                          </FormLabel>
+                          <FormDescription>
+                            Use this when direct connection to the database is not possible
+                          </FormDescription>
+                        </div>
+                      </FormItem>
+                    )}
+                  />
+                </div>
+
+                {form.watch('useSSHTunnel') && (
+                  <div className="space-y-4 mt-4 p-4 border rounded-md">
+                    <h3 className="font-medium">SSH Tunnel Configuration</h3>
+                    
+                    <FormField
+                      control={form.control}
+                      name="sshHost"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>SSH Host</FormLabel>
+                          <FormControl>
+                            <Input placeholder="ssh.example.com" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    
+                    <FormField
+                      control={form.control}
+                      name="sshPort"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>SSH Port</FormLabel>
+                          <FormControl>
+                            <Input
+                              type="number"
+                              placeholder="22"
+                              {...field}
+                              onChange={(e) => field.onChange(parseInt(e.target.value))}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    
+                    <FormField
+                      control={form.control}
+                      name="sshUsername"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>SSH Username</FormLabel>
+                          <FormControl>
+                            <Input placeholder="username" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    
+                    <Tabs defaultValue="password" className="w-full">
+                      <TabsList className="grid w-full grid-cols-3">
+                        <TabsTrigger value="password">Password</TabsTrigger>
+                        <TabsTrigger value="key">Private Key</TabsTrigger>
+                        <TabsTrigger value="file">PEM File</TabsTrigger>
+                      </TabsList>
+                      
+                      <TabsContent value="password">
+                        <FormField
+                          control={form.control}
+                          name="sshPassword"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>SSH Password</FormLabel>
+                              <FormControl>
+                                <Input type="password" placeholder="password" {...field} />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      </TabsContent>
+                      
+                      <TabsContent value="key">
+                        <FormField
+                          control={form.control}
+                          name="sshPrivateKey"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>Private Key</FormLabel>
+                              <FormControl>
+                                <Textarea
+                                  placeholder="Paste your private key here"
+                                  className="h-28"
+                                  {...field}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        
+                        <FormField
+                          control={form.control}
+                          name="sshKeyPassphrase"
+                          render={({ field }) => (
+                            <FormItem className="mt-4">
+                              <FormLabel>Key Passphrase (if any)</FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="password"
+                                  placeholder="passphrase"
+                                  {...field}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      </TabsContent>
+                      
+                      <TabsContent value="file">
+                        <FormItem>
+                          <FormLabel>PEM File</FormLabel>
+                          <FormControl>
+                            <Input 
+                              type="file" 
+                              accept=".pem,.key,.ppk"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  const reader = new FileReader();
+                                  reader.onload = (event) => {
+                                    const contents = event.target?.result as string;
+                                    form.setValue('sshPrivateKey', contents);
+                                  };
+                                  reader.readAsText(file);
+                                }
+                              }}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            Upload a .pem file containing your private key
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                        
+                        <FormField
+                          control={form.control}
+                          name="sshKeyPassphrase"
+                          render={({ field }) => (
+                            <FormItem className="mt-4">
+                              <FormLabel>Key Passphrase (if any)</FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="password"
+                                  placeholder="passphrase"
+                                  {...field}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      </TabsContent>
+                    </Tabs>
+                  </div>
+                )}
 
                 <div className="flex justify-between items-center">
                   <Button

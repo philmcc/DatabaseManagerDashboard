@@ -8,13 +8,21 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { SelectDatabaseConnection, SelectDatabaseOperationLog } from "@db/schema";
 import { useState, useEffect } from "react";
-import { format } from "date-fns";
+import { format, formatDistanceToNow } from "date-fns";
 import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 interface LogDetails {
   before?: Record<string, any>;
@@ -37,12 +45,13 @@ interface DatabaseLog extends SelectDatabaseOperationLog {
 
 interface RunningQuery {
   pid: number;
-  username: string;
-  database: string;
+  usename: string;
+  application_name: string | null;
+  client_addr: string | null;
+  backend_start: string;
+  query_start: string;
   state: string;
   query: string;
-  duration: string;
-  started_at: string;
 }
 
 // Helper function to convert duration string to seconds
@@ -89,48 +98,9 @@ export default function DatabaseDetails() {
     queryKey: [`/api/database-logs?page=${page}&pageSize=${pageSize}&databaseId=${id}`],
   });
 
-  const { data: runningQueries, refetch: refetchQueries, error: queriesError } = useQuery<RunningQuery[]>({
+  const { data: runningQueries = [], isLoading: isLoadingQueries } = useQuery<RunningQuery[]>({
     queryKey: [`/api/databases/${id}/running-queries`],
-    refetchInterval: false,
-    queryFn: async ({ queryKey: [url] }) => {
-      console.log('Fetching running queries...');
-      try {
-        const response = await fetch(`/api/databases/${id}/running-queries`, {
-          credentials: 'include'
-        });
-        
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error('Running queries error response:', {
-            status: response.status,
-            statusText: response.statusText,
-            body: errorText
-          });
-          throw new Error(`Failed to fetch running queries: ${response.status} ${response.statusText}`);
-        }
-        
-        const data = await response.json();
-        console.log('Running queries response data:', data);
-        return data;
-      } catch (error) {
-        console.error('Error in query function:', error);
-        throw error;
-      }
-    },
-    onError: (error) => {
-      console.error('Error fetching running queries:', error);
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: error instanceof Error ? error.message : "Failed to fetch running queries"
-      });
-    },
-    onSuccess: (data) => {
-      console.log('Successfully received running queries:', {
-        count: data?.length,
-        data
-      });
-    }
+    refetchInterval: 5000, // Refresh every 5 seconds
   });
 
   const logs = logsData?.logs || [];
@@ -241,8 +211,8 @@ export default function DatabaseDetails() {
           details: {
             pid,
             queryText: queryToKill?.query?.substring(0, 500),
-            username: queryToKill?.username,
-            duration: queryToKill?.duration,
+            username: queryToKill?.usename,
+            duration: queryToKill?.query_start,
             action: 'manual_kill'
           }
         }),
@@ -291,8 +261,8 @@ export default function DatabaseDetails() {
             details: {
               pid,
               query: queryToKill?.query,
-              username: queryToKill?.username,
-              duration: queryToKill?.duration,
+              username: queryToKill?.usename,
+              duration: queryToKill?.query_start,
               action: 'manual_kill',
               error: error
             }
@@ -316,9 +286,6 @@ export default function DatabaseDetails() {
       return response.json();
     },
     onSuccess: () => {
-      refetchQueries();
-      console.log('Invalidating queries after successful kill');
-      // Invalidate logs queries to show the new log entry
       queryClient.invalidateQueries({ 
         predicate: (query) => {
           const key = query.queryKey[0].toString();
@@ -343,25 +310,19 @@ export default function DatabaseDetails() {
   });
 
   const handleRefreshQueries = async () => {
-    console.log('Starting query refresh...');
     try {
-      const result = await refetchQueries();
-      console.log('Refresh completed:', {
-        success: result.isSuccess,
-        data: result.data,
-        error: result.error
+      await queryClient.invalidateQueries({
+        queryKey: [`/api/databases/${id}/running-queries`]
       });
-      
       toast({
-        title: "Refreshed",
-        description: `Found ${result.data?.length || 0} running queries`,
+        title: "Success",
+        description: "Queries refreshed",
       });
     } catch (error) {
-      console.error('Error refreshing queries:', error);
       toast({
         variant: "destructive",
-        title: "Refresh failed",
-        description: error instanceof Error ? error.message : "Failed to refresh running queries",
+        title: "Error",
+        description: "Failed to refresh queries",
       });
     }
   };
@@ -440,7 +401,7 @@ export default function DatabaseDetails() {
     const intervalId = setInterval(() => {
       (async () => {
         try {
-          const result = await refetchQueries();
+          const result = await queryClient.invalidateQueries({ queryKey: [`/api/databases/${id}/running-queries`] });
           const updatedQueries: RunningQuery[] = result.data || [];
 
           for (const query of updatedQueries) {
@@ -482,7 +443,21 @@ export default function DatabaseDetails() {
     }, 2000);
 
     return () => clearInterval(intervalId);
-  }, [isContinuousKilling, continuousKillSignature, refetchQueries, queryClient, id]);
+  }, [isContinuousKilling, continuousKillSignature, queryClient, id]);
+
+  // Format the duration since query start
+  const formatQueryDuration = (queryStart: string) => {
+    try {
+      const start = new Date(queryStart);
+      if (isNaN(start.getTime())) {
+        return 'Invalid date';
+      }
+      return formatDistanceToNow(start, { addSuffix: true });
+    } catch (error) {
+      console.error('Error formatting date:', error);
+      return 'Invalid date';
+    }
+  };
 
   if (isLoadingDatabase) {
     return (
@@ -733,120 +708,54 @@ export default function DatabaseDetails() {
                       </Button>
                     </div>
                     
-                    {queriesError ? (
-                      <p className="text-center text-red-500">
-                        Error loading queries: {(queriesError as Error).message}
-                      </p>
-                    ) : !runningQueries ? (
+                    {isLoadingQueries ? (
                       <p className="text-center text-muted-foreground">Loading queries...</p>
                     ) : (
-                      <div className="space-y-4">
-                        {console.log('Rendering running queries:', runningQueries)}
-                        {runningQueries.length === 0 ? (
-                          <p className="text-center text-muted-foreground py-4">
-                            No queries currently running
-                          </p>
-                        ) : (
-                          <Accordion type="multiple" className="space-y-2">
-                            {runningQueries
-                              .sort((a, b) => durationToSeconds(b.duration) - durationToSeconds(a.duration))
-                              .map((query, index) => (
-                                <AccordionItem
-                                  key={`${query.pid}-${index}`}
-                                  value={`${query.pid}-${index}`}
-                                  className="border rounded-lg px-4"
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>PID</TableHead>
+                            <TableHead>User</TableHead>
+                            <TableHead>Application</TableHead>
+                            <TableHead>Client</TableHead>
+                            <TableHead>Duration</TableHead>
+                            <TableHead>State</TableHead>
+                            <TableHead>Query</TableHead>
+                            <TableHead></TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {runningQueries.map((query) => (
+                            <TableRow key={query.pid}>
+                              <TableCell>{query.pid}</TableCell>
+                              <TableCell>{query.usename}</TableCell>
+                              <TableCell>{query.application_name || '-'}</TableCell>
+                              <TableCell>{query.client_addr || '-'}</TableCell>
+                              <TableCell>{formatQueryDuration(query.query_start)}</TableCell>
+                              <TableCell>{query.state}</TableCell>
+                              <TableCell className="max-w-md truncate">
+                                <code className="text-sm">{query.query}</code>
+                              </TableCell>
+                              <TableCell>
+                                <Button
+                                  variant="destructive"
+                                  size="sm"
+                                  onClick={() => killQuery({ pid: query.pid })}
                                 >
-                                  <AccordionTrigger className="hover:no-underline py-2">
-                                    <div className="flex flex-1 items-center gap-4">
-                                      <div className="flex items-center gap-2 min-w-[140px]">
-                                        <Badge variant="outline">{query.state}</Badge>
-                                        <span className="text-sm text-muted-foreground whitespace-nowrap">
-                                          PID: {query.pid}
-                                        </span>
-                                        <Button
-                                          variant="outline"
-                                          size="sm"
-                                          className={`ml-2 ${
-                                            continuousKillSignature === extractSignature(query.query)
-                                              ? "bg-green-500 text-white hover:bg-green-600"
-                                              : ""
-                                          }`}
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            const sig = extractSignature(query.query);
-                                            if (continuousKillSignature === sig) {
-                                              handleContinuousKillToggle();
-                                            } else {
-                                              setContinuousKillSignature(sig);
-                                              toast({
-                                                title: "Target Set",
-                                                description: `Continuous kill target set (first 80 chars): "${sig}"`,
-                                              });
-                                            }
-                                          }}
-                                        >
-                                          {continuousKillSignature === extractSignature(query.query)
-                                            ? "Clear Target"
-                                            : "Set as Target"}
-                                        </Button>
-                                      </div>
-                                      <div className="text-left text-sm whitespace-nowrap min-w-[150px]">
-                                        <span className="font-medium">Duration:</span>{' '}
-                                        {query.duration}
-                                      </div>
-                                      <div className="flex-1 text-left text-sm truncate">
-                                        {query.query.split('\n')[0]}
-                                      </div>
-                                    </div>
-                                  </AccordionTrigger>
-                                  <AccordionContent className="pb-2">
-                                    <div className="space-y-2">
-                                      <div className="flex justify-between items-start">
-                                        <div className="grid grid-cols-2 gap-2">
-                                          <div>
-                                            <p className="text-sm">
-                                              <span className="font-medium">User:</span> {query.username}
-                                            </p>
-                                            <p className="text-sm">
-                                              <span className="font-medium">Database:</span> {query.database}
-                                            </p>
-                                          </div>
-                                          <div>
-                                            <p className="text-sm">
-                                              <span className="font-medium">Started:</span>{' '}
-                                              {format(new Date(query.started_at), 'PPpp')}
-                                            </p>
-                                            <p className="text-sm">
-                                              <span className="font-medium">State:</span> {query.state}
-                                            </p>
-                                          </div>
-                                        </div>
-                                        <Button
-                                          variant="destructive"
-                                          size="sm"
-                                          onClick={() => {
-                                            if (confirm(`Are you sure you want to terminate this query (PID: ${query.pid})?`)) {
-                                              killQuery({ pid: query.pid });
-                                            }
-                                          }}
-                                          className="flex items-center gap-2"
-                                        >
-                                          <XCircle className="h-4 w-4" />
-                                          Kill Query
-                                        </Button>
-                                      </div>
-                                      <div className="bg-muted p-3 rounded-md mt-2">
-                                        <pre className="text-sm overflow-x-auto whitespace-pre-wrap">
-                                          <code>{query.query}</code>
-                                        </pre>
-                                      </div>
-                                    </div>
-                                  </AccordionContent>
-                                </AccordionItem>
-                              ))}
-                          </Accordion>
-                        )}
-                      </div>
+                                  Kill
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                          {runningQueries.length === 0 && (
+                            <TableRow>
+                              <TableCell colSpan={8} className="text-center text-muted-foreground">
+                                No running queries
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </TableBody>
+                      </Table>
                     )}
                   </div>
                 </AccordionContent>

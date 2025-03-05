@@ -22,15 +22,24 @@ import { Loader2 } from "lucide-react";
 import type { SelectInstance, SelectCluster } from "@db/schema";
 import React from "react";
 import Navbar from "@/components/layout/navbar";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const instanceSchema = z.object({
   hostname: z.string().min(1, "Hostname is required"),
-  port: z.number().int().min(1, "Port is required"),
+  port: z.coerce.number().int().min(1).max(65535).default(5432),
   username: z.string().min(1, "Username is required"),
   password: z.string().min(1, "Password is required"),
   description: z.string().optional(),
   isWriter: z.boolean().default(false),
   defaultDatabaseName: z.string().optional(),
+  useSSHTunnel: z.boolean().default(false),
+  sshHost: z.string().optional(),
+  sshPort: z.coerce.number().default(22),
+  sshUsername: z.string().optional(),
+  sshPassword: z.string().optional(),
+  sshPrivateKey: z.string().optional(),
+  sshKeyPassphrase: z.string().optional(),
 });
 
 type FormData = z.infer<typeof instanceSchema>;
@@ -43,6 +52,13 @@ const defaultFormValues: FormData = {
   description: "",
   isWriter: false,
   defaultDatabaseName: "",
+  useSSHTunnel: false,
+  sshHost: "",
+  sshPort: 22,
+  sshUsername: "",
+  sshPassword: "",
+  sshPrivateKey: "",
+  sshKeyPassphrase: "",
 };
 
 function InstanceForm() {
@@ -51,49 +67,38 @@ function InstanceForm() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  // Only fetch instance data if we're editing (id exists and is not 'new')
-  const { data: instance, isLoading: isLoadingInstance } = useQuery<SelectInstance>({
-    queryKey: [`/api/instances/${params.id}`],
-    enabled: !!params.id && params.id !== 'new',
-  });
-
-  // Always fetch cluster data since we need it for both edit and create
-  const { data: cluster, isLoading: isLoadingCluster } = useQuery<SelectCluster>({
-    queryKey: [`/api/clusters/${params.clusterId}`],
-    enabled: true,
-  });
-
+  // Move form initialization before any conditional logic
   const form = useForm<FormData>({
     resolver: zodResolver(instanceSchema),
     defaultValues: defaultFormValues,
   });
 
-  // Update form values when editing and instance data is loaded
-  React.useEffect(() => {
-    if (!!params.id && params.id !== 'new' && instance) {
-      form.reset({
-        hostname: instance.hostname,
-        port: instance.port,
-        username: instance.username,
-        password: instance.password,
-        description: instance.description || "",
-        isWriter: instance.isWriter || false,
-        defaultDatabaseName: instance.defaultDatabaseName || "",
-      });
-    }
-  }, [instance, form, params.id]);
+  // Queries should be defined before any conditional returns
+  const { data: instance, isLoading: isLoadingInstance } = useQuery<SelectInstance>({
+    queryKey: [`/api/instances/${params.id}`],
+    enabled: !!params.id && params.id !== 'new',
+  });
 
+  const { data: cluster, isLoading: isLoadingCluster } = useQuery<SelectCluster>({
+    queryKey: [`/api/clusters/${params.clusterId}`],
+    enabled: true,
+  });
+
+  // Define mutations before any conditional returns
   const testConnection = useMutation({
     mutationFn: async (values: FormData) => {
       const response = await fetch(`/api/instances/test-connection`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json"
+        },
         body: JSON.stringify(values),
-        credentials: "include",
+        credentials: "include"
       });
 
       if (!response.ok) {
-        throw new Error(await response.text());
+        const errorData = await response.json().catch(() => ({ message: "Connection failed" }));
+        throw new Error(errorData.message || "Connection failed");
       }
 
       return response.json();
@@ -154,7 +159,38 @@ function InstanceForm() {
     },
   });
 
-  // Only show loading state if we're waiting for required data
+  // Handle form updates when instance data is loaded
+  React.useEffect(() => {
+    if (!!params.id && params.id !== 'new' && instance) {
+      form.reset({
+        hostname: instance.hostname,
+        port: instance.port,
+        username: instance.username,
+        password: instance.password,
+        description: instance.description || "",
+        isWriter: instance.isWriter || false,
+        defaultDatabaseName: instance.defaultDatabaseName || "",
+        useSSHTunnel: instance.useSSHTunnel || false,
+        sshHost: instance.sshHost || "",
+        sshPort: instance.sshPort || 22,
+        sshUsername: instance.sshUsername || "",
+        sshPassword: instance.sshPassword || "",
+        sshPrivateKey: instance.sshPrivateKey || "",
+        sshKeyPassphrase: instance.sshKeyPassphrase || "",
+      });
+    }
+  }, [instance, form, params.id]);
+
+  const handleTestConnection = React.useCallback(() => {
+    const values = form.getValues();
+    testConnection.mutate(values);
+  }, [form, testConnection]);
+
+  const onSubmit = React.useCallback((data: FormData) => {
+    mutation.mutate(data);
+  }, [mutation]);
+
+  // Loading state
   if (isLoadingCluster || (params.id && params.id !== 'new' && isLoadingInstance)) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -163,7 +199,7 @@ function InstanceForm() {
     );
   }
 
-  // Show error if the cluster is not found (needed for both edit and create)
+  // Error states
   if (!cluster) {
     return (
       <div>
@@ -188,7 +224,6 @@ function InstanceForm() {
     );
   }
 
-  // Show error if we're editing and can't find the instance
   if (params.id && params.id !== 'new' && !instance) {
     return (
       <div>
@@ -213,15 +248,7 @@ function InstanceForm() {
     );
   }
 
-  const onSubmit = (data: FormData) => {
-    mutation.mutate(data);
-  };
-
-  const handleTestConnection = () => {
-    const values = form.getValues();
-    testConnection.mutate(values);
-  };
-
+  // Main render
   return (
     <div>
       <Navbar />
@@ -367,6 +394,191 @@ function InstanceForm() {
                       </FormItem>
                     )}
                   />
+
+                  <div className="mt-4">
+                    <FormField
+                      control={form.control}
+                      name="useSSHTunnel"
+                      render={({ field }) => (
+                        <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
+                          <FormControl>
+                            <Checkbox
+                              checked={field.value}
+                              onCheckedChange={field.onChange}
+                            />
+                          </FormControl>
+                          <div className="space-y-1 leading-none">
+                            <FormLabel>
+                              Connect via SSH Tunnel
+                            </FormLabel>
+                            <FormDescription>
+                              Use this when direct connection to the database server is not possible
+                            </FormDescription>
+                          </div>
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+
+                  {form.watch('useSSHTunnel') && (
+                    <div className="space-y-4 mt-4 p-4 border rounded-md">
+                      <h3 className="font-medium">SSH Tunnel Configuration</h3>
+                      
+                      <FormField
+                        control={form.control}
+                        name="sshHost"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>SSH Host</FormLabel>
+                            <FormControl>
+                              <Input placeholder="ssh.example.com" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      
+                      <FormField
+                        control={form.control}
+                        name="sshPort"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>SSH Port</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                placeholder="22"
+                                {...field}
+                                onChange={(e) => field.onChange(parseInt(e.target.value))}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      
+                      <FormField
+                        control={form.control}
+                        name="sshUsername"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>SSH Username</FormLabel>
+                            <FormControl>
+                              <Input placeholder="username" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      
+                      <Tabs defaultValue="password" className="w-full">
+                        <TabsList className="grid w-full grid-cols-3">
+                          <TabsTrigger value="password">Password</TabsTrigger>
+                          <TabsTrigger value="key">Private Key</TabsTrigger>
+                          <TabsTrigger value="file">PEM File</TabsTrigger>
+                        </TabsList>
+                        
+                        <TabsContent value="password">
+                          <FormField
+                            control={form.control}
+                            name="sshPassword"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>SSH Password</FormLabel>
+                                <FormControl>
+                                  <Input type="password" placeholder="password" {...field} />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                        </TabsContent>
+                        
+                        <TabsContent value="key">
+                          <FormField
+                            control={form.control}
+                            name="sshPrivateKey"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Private Key</FormLabel>
+                                <FormControl>
+                                  <Textarea
+                                    placeholder="Paste your private key here"
+                                    className="h-28"
+                                    {...field}
+                                  />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                          
+                          <FormField
+                            control={form.control}
+                            name="sshKeyPassphrase"
+                            render={({ field }) => (
+                              <FormItem className="mt-4">
+                                <FormLabel>Key Passphrase (if any)</FormLabel>
+                                <FormControl>
+                                  <Input
+                                    type="password"
+                                    placeholder="passphrase"
+                                    {...field}
+                                  />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                        </TabsContent>
+                        
+                        <TabsContent value="file">
+                          <FormItem>
+                            <FormLabel>PEM File</FormLabel>
+                            <FormControl>
+                              <Input 
+                                type="file" 
+                                accept=".pem,.key,.ppk"
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (file) {
+                                    const reader = new FileReader();
+                                    reader.onload = (event) => {
+                                      const contents = event.target?.result as string;
+                                      form.setValue('sshPrivateKey', contents);
+                                    };
+                                    reader.readAsText(file);
+                                  }
+                                }}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              Upload a .pem file containing your private key
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                          
+                          <FormField
+                            control={form.control}
+                            name="sshKeyPassphrase"
+                            render={({ field }) => (
+                              <FormItem className="mt-4">
+                                <FormLabel>Key Passphrase (if any)</FormLabel>
+                                <FormControl>
+                                  <Input
+                                    type="password"
+                                    placeholder="passphrase"
+                                    {...field}
+                                  />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                        </TabsContent>
+                      </Tabs>
+                    </div>
+                  )}
 
                   <div className="flex justify-between gap-4">
                     <Button

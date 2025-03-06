@@ -401,52 +401,6 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
     updateConfigMutation.mutate();
   };
 
-  const testApiConnection = async () => {
-    try {
-      console.log('Testing API connection...');
-      
-      // Log all request details
-      const requestDetails = {
-        url: '/api/test',
-        method: 'GET',
-        timestamp: new Date().toISOString()
-      };
-      console.log('Request details:', requestDetails);
-      
-      const response = await fetch('/api/test');
-      console.log('Test API Response Status:', response.status);
-      console.log('Test API Response Headers:', Object.fromEntries([...response.headers.entries()]));
-      
-      if (!response.ok) {
-        const text = await response.text();
-        console.error('API test error response:', text);
-        throw new Error('API test failed');
-      }
-      
-      const data = await response.json();
-      console.log('API test successful response data:', data);
-      
-      // Now that test is working, let's try query monitoring API
-      console.log('Testing query monitoring API...');
-      const monitoringTestResponse = await fetch(`/api/databases/${databaseId}/query-monitoring/config`);
-      console.log('Monitoring config API status:', monitoringTestResponse.status);
-      
-      if (!monitoringTestResponse.ok) {
-        const errorText = await monitoringTestResponse.text();
-        console.error('Monitoring config API error:', errorText.substring(0, 200));
-        return false;
-      }
-      
-      const configData = await monitoringTestResponse.json();
-      console.log('Monitoring config data:', configData);
-      
-      return true;
-    } catch (error) {
-      console.error('API test error:', error);
-      return false;
-    }
-  };
-
   const handleStartMonitoring = () => {
     if (useMockedData) {
       const mockQueries = generateTestQueries();
@@ -477,18 +431,8 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
       return;
     }
     
-    // Original API call logic
-    testApiConnection().then(success => {
-      if (success) {
-        startMonitoringMutation.mutate();
-      } else {
-        toast({
-          variant: "destructive",
-          title: "API Error",
-          description: "Could not connect to the API. Check console for details."
-        });
-      }
-    });
+    // Call the actual monitoring endpoint directly
+    startMonitoringMutation.mutate();
   };
 
   const handleMarkQueryKnown = (queryId: number, isKnown: boolean) => {

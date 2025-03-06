@@ -2,8 +2,8 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { setupAuth } from "./auth";
 import { db } from "@db";
-import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics, clusters, instances, healthCheckQueries, healthCheckExecutions, healthCheckResults, healthCheckReports } from "@db/schema";
-import { eq, and, ne, sql, desc, asc } from "drizzle-orm";
+import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics, clusters, instances, healthCheckQueries, healthCheckExecutions, healthCheckResults, healthCheckReports, queryMonitoringConfigs, discoveredQueries, queryGroups } from "@db/schema";
+import { eq, and, ne, sql, desc, asc, isNull } from "drizzle-orm";
 import pg from 'pg';
 import { z } from "zod";
 import express from 'express';
@@ -2998,6 +2998,238 @@ export function registerRoutes(app: Express): Server {
       if (cleanup) {
         await cleanup();
       }
+    }
+  });
+
+  // Query monitoring endpoints
+  app.get("/api/databases/:id/query-monitoring/config", requireAuth, async (req, res) => {
+    try {
+      const databaseId = parseInt(req.params.id);
+      console.log(`Fetching query monitoring config for database ${databaseId}`);
+      
+      // Get current configuration
+      const config = await db.query.queryMonitoringConfigs.findFirst({
+        where: eq(queryMonitoringConfigs.databaseId, databaseId)
+      });
+      
+      if (!config) {
+        return res.json({ 
+          isActive: false, 
+          intervalMinutes: 15,
+          lastRunAt: null
+        });
+      }
+      
+      return res.json(config);
+    } catch (error) {
+      console.error('Error fetching query monitoring config:', error);
+      return res.status(500).json({ error: 'Failed to fetch configuration' });
+    }
+  });
+
+  app.post("/api/databases/:id/query-monitoring/config", requireAuth, async (req, res) => {
+    try {
+      const databaseId = parseInt(req.params.id);
+      const { isActive, intervalMinutes } = req.body;
+      console.log(`Updating query monitoring config for database ${databaseId}:`, { isActive, intervalMinutes });
+      
+      // Check if config exists
+      const existingConfig = await db.query.queryMonitoringConfigs.findFirst({
+        where: eq(queryMonitoringConfigs.databaseId, databaseId)
+      });
+      
+      if (existingConfig) {
+        // Update existing config
+        await db.update(queryMonitoringConfigs)
+          .set({ 
+            isActive, 
+            intervalMinutes,
+            updatedAt: new Date()
+          })
+          .where(eq(queryMonitoringConfigs.id, existingConfig.id));
+      } else {
+        // Create new config
+        await db.insert(queryMonitoringConfigs).values({
+          databaseId,
+          isActive,
+          intervalMinutes,
+          userId: req.user.id,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        });
+      }
+      
+      return res.json({ success: true });
+    } catch (error) {
+      console.error('Error updating query monitoring config:', error);
+      return res.status(500).json({ error: 'Failed to update configuration' });
+    }
+  });
+
+  app.post("/api/databases/:id/query-monitoring/start", requireAuth, async (req, res) => {
+    try {
+      const databaseId = parseInt(req.params.id);
+      console.log(`Starting query monitoring for database ${databaseId}`);
+      
+      // Get the monitoring config
+      const config = await db.query.queryMonitoringConfigs.findFirst({
+        where: eq(queryMonitoringConfigs.databaseId, databaseId)
+      });
+      
+      if (!config) {
+        console.log(`No monitoring config found for database ${databaseId}, creating default`);
+        await db.insert(queryMonitoringConfigs).values({
+          databaseId,
+          isActive: true,
+          intervalMinutes: 15,
+          userId: req.user.id,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        });
+      } else if (!config.isActive) {
+        return res.status(400).json({ error: 'Monitoring is not active for this database' });
+      }
+      
+      // For this test endpoint, just update the lastRunAt time
+      await db.update(queryMonitoringConfigs)
+        .set({ lastRunAt: new Date() })
+        .where(eq(queryMonitoringConfigs.databaseId, databaseId));
+      
+      return res.json({ success: true, message: "Query monitoring started" });
+    } catch (error) {
+      console.error('Error starting monitoring:', error);
+      return res.status(500).json({ 
+        error: 'Failed to start monitoring',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // Add this endpoint near the other query monitoring endpoints
+  app.get("/api/databases/:id/discovered-queries", requireAuth, async (req, res) => {
+    try {
+      const databaseId = parseInt(req.params.id);
+      const showKnown = req.query.showKnown === 'true';
+      const groupId = req.query.groupId;
+      
+      console.log(`Fetching discovered queries for database ${databaseId}:`, { 
+        showKnown, 
+        groupId 
+      });
+      
+      // Build the where conditions
+      let whereConditions = eq(discoveredQueries.databaseId, databaseId);
+      
+      // Handle known/unknown filter
+      if (!showKnown) {
+        whereConditions = and(
+          whereConditions,
+          eq(discoveredQueries.isKnown, false)
+        );
+      }
+      
+      // Handle group filter
+      if (groupId === 'ungrouped') {
+        whereConditions = and(
+          whereConditions,
+          isNull(discoveredQueries.groupId)
+        );
+      } else if (groupId && groupId !== 'all_queries') {
+        whereConditions = and(
+          whereConditions,
+          eq(discoveredQueries.groupId, parseInt(groupId as string))
+        );
+      }
+      
+      // Query the database
+      const queries = await db.query.discoveredQueries.findMany({
+        where: whereConditions,
+        orderBy: [
+          desc(discoveredQueries.lastSeenAt)
+        ],
+        limit: 100 // Limit to prevent loading too many queries
+      });
+      
+      return res.json(queries);
+    } catch (error) {
+      console.error('Error fetching discovered queries:', error);
+      return res.status(500).json({ 
+        error: 'Failed to fetch discovered queries',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // Add endpoint for updating discovered queries
+  app.patch("/api/databases/:id/discovered-queries", requireAuth, async (req, res) => {
+    try {
+      const databaseId = parseInt(req.params.id);
+      const { queryId, isKnown, groupId } = req.body;
+      
+      console.log(`Updating discovered query for database ${databaseId}:`, { 
+        queryId,
+        isKnown,
+        groupId
+      });
+      
+      // Check that the query exists and belongs to this database
+      const query = await db.query.discoveredQueries.findFirst({
+        where: and(
+          eq(discoveredQueries.id, queryId),
+          eq(discoveredQueries.databaseId, databaseId)
+        )
+      });
+      
+      if (!query) {
+        return res.status(404).json({ error: 'Query not found' });
+      }
+      
+      // Update the query
+      const updateData: Partial<typeof discoveredQueries.$inferSelect> = {
+        updatedAt: new Date()
+      };
+      
+      if (isKnown !== undefined) {
+        updateData.isKnown = isKnown;
+      }
+      
+      if (groupId !== undefined) {
+        updateData.groupId = groupId;
+      }
+      
+      await db.update(discoveredQueries)
+        .set(updateData)
+        .where(eq(discoveredQueries.id, queryId));
+      
+      return res.json({ success: true });
+    } catch (error) {
+      console.error('Error updating discovered query:', error);
+      return res.status(500).json({ 
+        error: 'Failed to update discovered query',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // Add endpoint for query groups
+  app.get("/api/databases/:id/query-groups", requireAuth, async (req, res) => {
+    try {
+      const databaseId = parseInt(req.params.id);
+      
+      const groups = await db.query.queryGroups.findMany({
+        where: eq(queryGroups.databaseId, databaseId),
+        orderBy: [
+          asc(queryGroups.name)
+        ]
+      });
+      
+      return res.json(groups);
+    } catch (error) {
+      console.error('Error fetching query groups:', error);
+      return res.status(500).json({ 
+        error: 'Failed to fetch query groups',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
     }
   });
 

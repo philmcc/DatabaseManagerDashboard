@@ -407,3 +407,52 @@ export const discoveredQueries = pgTable("discovered_queries", {
 export type SelectQueryMonitoringConfig = typeof queryMonitoringConfigs.$inferSelect;
 export type SelectQueryGroup = typeof queryGroups.$inferSelect;
 export type SelectDiscoveredQuery = typeof discoveredQueries.$inferSelect;
+
+// Add query monitoring relations after line 408 (at the end of the file)
+// Relations for query monitoring tables
+export const queryMonitoringConfigRelations = relations(queryMonitoringConfigs, ({ one, many }) => ({
+  database: one(databaseConnections, {
+    fields: [queryMonitoringConfigs.databaseId],
+    references: [databaseConnections.id],
+  }),
+  user: one(users, {
+    fields: [queryMonitoringConfigs.userId],
+    references: [users.id],
+  }),
+}));
+
+export const queryGroupRelations = relations(queryGroups, ({ one, many }) => ({
+  database: one(databaseConnections, {
+    fields: [queryGroups.databaseId],
+    references: [databaseConnections.id],
+  }),
+  user: one(users, {
+    fields: [queryGroups.userId],
+    references: [users.id],
+  }),
+  queries: many(discoveredQueries),
+}));
+
+export const discoveredQueryRelations = relations(discoveredQueries, ({ one }) => ({
+  database: one(databaseConnections, {
+    fields: [discoveredQueries.databaseId],
+    references: [databaseConnections.id],
+  }),
+  group: one(queryGroups, {
+    fields: [discoveredQueries.groupId],
+    references: [queryGroups.id],
+  }),
+}));
+
+// Create schemas for query monitoring tables
+export const insertQueryMonitoringConfigSchema = createInsertSchema(queryMonitoringConfigs);
+export const selectQueryMonitoringConfigSchema = createSelectSchema(queryMonitoringConfigs);
+export const insertQueryGroupSchema = createInsertSchema(queryGroups);
+export const selectQueryGroupSchema = createSelectSchema(queryGroups);
+export const insertDiscoveredQuerySchema = createInsertSchema(discoveredQueries);
+export const selectDiscoveredQuerySchema = createSelectSchema(discoveredQueries);
+
+// Define types for query monitoring tables
+export type InsertQueryMonitoringConfig = typeof queryMonitoringConfigs.$inferInsert;
+export type InsertQueryGroup = typeof queryGroups.$inferInsert;
+export type InsertDiscoveredQuery = typeof discoveredQueries.$inferInsert;

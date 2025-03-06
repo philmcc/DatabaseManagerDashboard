@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm';
 import { db } from '../index';
 
 export async function migrateQueryMonitoring() {
-  console.log('Starting query monitoring tables migration...');
+  console.log('Starting query monitoring tables migration with database connection:', !!db);
   
   try {
     // Create query monitoring configs table

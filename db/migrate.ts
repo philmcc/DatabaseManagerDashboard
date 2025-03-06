@@ -2,6 +2,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
 import * as path from 'path';
+import { migrateQueryMonitoring } from './migrations/add_query_monitoring';
 
 // Check for environment variable
 if (!process.env.DATABASE_URL) {
@@ -22,6 +23,9 @@ async function runMigration() {
     await migrate(db, {
       migrationsFolder: path.join(__dirname, 'migrations'),
     });
+    
+    // Run query monitoring migration
+    await migrateQueryMonitoring();
     
     console.log('Migrations completed successfully');
   } catch (error) {

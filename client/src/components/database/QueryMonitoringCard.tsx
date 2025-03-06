@@ -1,14 +1,33 @@
 import React, { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Accordion, AccordionItem, AccordionContent, AccordionTrigger } from "@/components/ui/accordion";
-import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { useToast } from "@/hooks/use-toast";
+import { Loader2, Database, Activity, Plus, RefreshCw } from "lucide-react";
+import { formatDistanceToNow } from "date-fns";
+
+// Define constants for select values
+const ALL_QUERIES = "all_queries";
+const UNGROUPED = "ungrouped";
+
+type QueryMonitoringConfig = {
+  id?: number;
+  databaseId: number;
+  intervalMinutes: number;
+  isActive: boolean;
+  lastRunAt: string | null;
+};
 
 type QueryGroup = {
   id: number;
+  databaseId: number;
   name: string;
   description: string | null;
   isKnown: boolean;
@@ -16,128 +35,625 @@ type QueryGroup = {
 
 type DiscoveredQuery = {
   id: number;
+  databaseId: number;
   queryText: string;
-  group: string | null;
-  status: string;
-  lastRun: string;
+  queryHash: string;
+  normalizedQuery: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  callCount: number;
+  totalTime: number;
+  minTime: number | null;
+  maxTime: number | null;
+  meanTime: number | null;
   isKnown: boolean;
-  name?: string;
+  groupId: number | null;
 };
 
 const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
-  const [queries, setQueries] = useState<DiscoveredQuery[]>([]);
-  const [groups, setGroups] = useState<QueryGroup[]>([]);
-  const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
-  const [newGroupName, setNewGroupName] = useState("");
-  const [newGroupDescription, setNewGroupDescription] = useState("");
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [showKnown, setShowKnown] = useState(false);
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(ALL_QUERIES);
+  const [intervalMinutes, setIntervalMinutes] = useState(15);
+  const [isMonitoringActive, setIsMonitoringActive] = useState(false);
 
-  // Fetch queries data
-  const { data: queriesData } = useQuery({
-    queryKey: [`database-${databaseId}-discovered-queries`],
-    queryFn: async () => {
-      // Replace with actual API call when ready
-      return [] as DiscoveredQuery[];
-    },
-    onSuccess: (data) => {
-      setQueries(data);
-    }
-  });
+  // Determine if we're using mocked data
+  const useMockedData = true; // Set to false when API is working
 
-  // Fetch groups data
-  const { data: groupsData } = useQuery({
-    queryKey: [`database-${databaseId}-query-groups`],
-    queryFn: async () => {
-      // Replace with actual API call when ready
-      return [] as QueryGroup[];
-    },
-    onSuccess: (data) => {
-      setGroups(data);
-    }
-  });
-
-  const handleMarkQueryKnown = (id: number, isKnown: boolean) => {
-    // Implement the logic to mark a query as known or new
-    console.log(`Marking query ${id} as ${isKnown ? 'known' : 'new'}`);
+  // Generate test groups
+  const generateTestGroups = (): QueryGroup[] => {
+    return [
+      {
+        id: 1,
+        databaseId,
+        name: "User Queries",
+        description: "Queries related to user operations",
+        isKnown: true
+      },
+      {
+        id: 2,
+        databaseId,
+        name: "Product Queries",
+        description: "Queries related to product operations",
+        isKnown: false
+      }
+    ];
   };
 
-  const handleUpdateInterval = (value: number) => {
-    // Implement the logic to update the interval
-    console.log(`Updating interval to ${value}`);
+  // Generate test configuration
+  const testConfig = {
+    id: 1,
+    databaseId,
+    intervalMinutes: 15,
+    isActive: true,
+    lastRunAt: new Date().toISOString()
+  };
+
+  // Add this function to generate test query data
+  const generateTestQueries = (): DiscoveredQuery[] => {
+    return Array.from({ length: 5 }).map((_, i) => ({
+      id: i + 1,
+      databaseId,
+      queryText: `SELECT * FROM users WHERE id = ${i + 1}`,
+      queryHash: `hash${i}`,
+      normalizedQuery: null,
+      firstSeenAt: new Date(Date.now() - 3600000 * 24).toISOString(),
+      lastSeenAt: new Date().toISOString(),
+      callCount: Math.floor(Math.random() * 100),
+      totalTime: Math.random() * 1000,
+      minTime: Math.random() * 10,
+      maxTime: Math.random() * 100,
+      meanTime: Math.random() * 50,
+      isKnown: i % 3 === 0,
+      groupId: i % 5 === 0 ? 1 : null,
+    }));
+  };
+
+  // Use mocked data in queries
+  const { data: config, isLoading: isLoadingConfig } = useQuery({
+    queryKey: [`database-${databaseId}-monitoring-config`],
+    queryFn: async () => {
+      if (useMockedData) {
+        return testConfig;
+      }
+      
+      try {
+        const response = await fetch(`/api/databases/${databaseId}/query-monitoring/config`);
+        console.log('Config API response status:', response.status);
+        
+        // If not ok, get the response text for debugging
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('API Error Response:', errorText);
+          throw new Error(`${response.status}: ${errorText.substring(0, 100)}...`);
+        }
+        
+        return await response.json();
+      } catch (error) {
+        console.error("Error fetching monitoring config:", error);
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: error instanceof Error ? error.message : "Failed to load monitoring configuration"
+        });
+        // Return a default value
+        return { isActive: false, intervalMinutes: 15, lastRunAt: null };
+      }
+    },
+    // We can retry a few times to handle temporary issues
+    retry: 2,
+    // Don't fail immediately on error
+    retryDelay: 1000,
+    onSuccess: (data) => {
+      setIntervalMinutes(data.intervalMinutes || 15);
+      setIsMonitoringActive(data.isActive || false);
+    }
+  });
+
+  // Fetch query groups
+  const { data: groups = generateTestGroups(), isLoading: isLoadingGroups } = useQuery({
+    queryKey: [`database-${databaseId}-query-groups`],
+    queryFn: async () => {
+      if (useMockedData) {
+        return generateTestGroups();
+      }
+      
+      try {
+        const response = await fetch(`/api/databases/${databaseId}/query-groups`);
+        if (!response.ok) {
+          throw new Error("Failed to fetch query groups");
+        }
+        return await response.json();
+      } catch (error) {
+        console.error("Error fetching query groups:", error);
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Failed to load query groups"
+        });
+        return [];
+      }
+    }
+  });
+
+  // Fetch discovered queries
+  const { data: queries = (useMockedData ? generateTestQueries() : []), isLoading: isLoadingQueries, refetch: refetchQueries } = useQuery({
+    queryKey: [`database-${databaseId}-discovered-queries`, { showKnown, groupId: selectedGroupId }],
+    queryFn: async () => {
+      if (useMockedData) {
+        // Return an empty array for now, or you could generate test data:
+        return [];
+      }
+      
+      try {
+        const queryParams = new URLSearchParams();
+        queryParams.append("showKnown", showKnown.toString());
+        
+        // Handle special group ID values
+        if (selectedGroupId === UNGROUPED) {
+          queryParams.append("groupId", "ungrouped");
+        } else if (selectedGroupId !== ALL_QUERIES && selectedGroupId) {
+          queryParams.append("groupId", selectedGroupId);
+        }
+        
+        const response = await fetch(
+          `/api/databases/${databaseId}/discovered-queries?${queryParams}`
+        );
+        
+        if (!response.ok) {
+          throw new Error("Failed to fetch discovered queries");
+        }
+        
+        return await response.json();
+      } catch (error) {
+        console.error("Error fetching discovered queries:", error);
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Failed to load discovered queries"
+        });
+        return [];
+      }
+    }
+  });
+
+  // Update monitoring config
+  const updateConfigMutation = useMutation({
+    mutationFn: async () => {
+      try {
+        const response = await fetch(`/api/databases/${databaseId}/query-monitoring/config`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            isActive: isMonitoringActive,
+            intervalMinutes
+          }),
+        });
+        
+        if (!response.ok) {
+          throw new Error("Failed to update monitoring configuration");
+        }
+        
+        return await response.json();
+      } catch (error) {
+        console.error("Error updating config:", error);
+        throw error;
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ 
+        queryKey: [`database-${databaseId}-monitoring-config`] 
+      });
+      toast({
+        title: "Success",
+        description: "Monitoring configuration updated",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message || "Failed to update configuration",
+      });
+    },
+  });
+
+  // Start monitoring
+  const startMonitoringMutation = useMutation({
+    mutationFn: async () => {
+      try {
+        // Using relative path for API URL 
+        const apiUrl = `/api/databases/${databaseId}/query-monitoring/start`;
+        
+        console.log('Attempting to call API:', apiUrl);
+        
+        const response = await fetch(apiUrl, {
+          method: "POST",
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({})
+        });
+        
+        console.log('API Response Status:', response.status);
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('API Error Response:', errorText.substring(0, 200));
+          throw new Error(`Failed to start monitoring: ${response.status}`);
+        }
+        
+        return await response.json();
+      } catch (error) {
+        console.error("Error starting monitoring:", error);
+        throw error;
+      }
+    },
+    onSuccess: () => {
+      toast({
+        title: "Success",
+        description: "Query monitoring started",
+      });
+      // After a slight delay, refetch the queries to show newly discovered ones
+      setTimeout(() => {
+        refetchQueries();
+      }, 2000);
+    },
+    onError: (error: any) => {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message || "Failed to start monitoring",
+      });
+    },
+  });
+
+  // Mark query as known/unknown
+  const markQueryMutation = useMutation({
+    mutationFn: async ({ queryId, isKnown }: { queryId: number, isKnown: boolean }) => {
+      try {
+        const response = await fetch(`/api/databases/${databaseId}/discovered-queries`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            queryId,
+            isKnown
+          }),
+        });
+        
+        if (!response.ok) {
+          throw new Error("Failed to update query");
+        }
+        
+        return await response.json();
+      } catch (error) {
+        console.error("Error updating query:", error);
+        throw error;
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ 
+        queryKey: [`database-${databaseId}-discovered-queries`] 
+      });
+      toast({
+        title: "Success",
+        description: "Query updated",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message || "Failed to update query",
+      });
+    },
+  });
+
+  // Assign query to group
+  const assignToGroupMutation = useMutation({
+    mutationFn: async ({ queryId, groupId }: { queryId: number, groupId: number | null }) => {
+      try {
+        const response = await fetch(`/api/databases/${databaseId}/discovered-queries`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            queryId,
+            groupId
+          }),
+        });
+        
+        if (!response.ok) {
+          throw new Error("Failed to assign query to group");
+        }
+        
+        return await response.json();
+      } catch (error) {
+        console.error("Error assigning query to group:", error);
+        throw error;
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ 
+        queryKey: [`database-${databaseId}-discovered-queries`] 
+      });
+      toast({
+        title: "Success",
+        description: "Query group updated",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message || "Failed to update query group",
+      });
+    },
+  });
+
+  const handleUpdateConfig = () => {
+    updateConfigMutation.mutate();
+  };
+
+  const testApiConnection = async () => {
+    try {
+      console.log('Testing API connection...');
+      const response = await fetch('/api/test');
+      console.log('Test API Status:', response.status);
+      
+      if (!response.ok) {
+        const text = await response.text();
+        console.error('API test error response:', text);
+        throw new Error('API test failed');
+      }
+      
+      const data = await response.json();
+      console.log('API test successful:', data);
+      return true;
+    } catch (error) {
+      console.error('API test error:', error);
+      return false;
+    }
+  };
+
+  const handleStartMonitoring = () => {
+    if (useMockedData) {
+      toast({
+        title: "Monitoring Started (Mock)",
+        description: "Using mock data mode - API calls are simulated"
+      });
+      return;
+    }
+    
+    // Test API connection first
+    testApiConnection().then(success => {
+      if (success) {
+        startMonitoringMutation.mutate();
+      } else {
+        toast({
+          variant: "destructive",
+          title: "API Error",
+          description: "Could not connect to the API. Please check server logs."
+        });
+      }
+    });
+  };
+
+  const handleMarkQueryKnown = (queryId: number, isKnown: boolean) => {
+    markQueryMutation.mutate({ queryId, isKnown });
   };
 
   const handleAssignToGroup = (queryId: number, groupId: number | null) => {
-    // Implement the logic to assign a query to a group
-    console.log(`Assigning query ${queryId} to group ${groupId}`);
+    assignToGroupMutation.mutate({ queryId, groupId });
   };
 
   return (
     <Card className="mt-6">
-      <CardContent className="pt-6">
-        <Accordion type="single" collapsible>
-          <AccordionItem value="item-1">
-            <AccordionTrigger>Query Monitoring</AccordionTrigger>
-            <AccordionContent>
-              <div className="flex space-x-4 mt-4">
-                <div className="flex-1">
-                  <Select>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select filter" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Queries</SelectItem>
-                      <SelectItem value="known">Known Queries</SelectItem>
-                      <SelectItem value="unknown">Unknown Queries</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex-1">
-                  <Select>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select group" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Groups</SelectItem>
-                      <SelectItem value="ungrouped">Ungrouped</SelectItem>
-                      {groups.map((group) => (
-                        <SelectItem key={group.id} value={group.id.toString()}>
-                          {group.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex-1">
-                  <Select>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Sort by" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="recent">Most Recent</SelectItem>
-                      <SelectItem value="oldest">Oldest</SelectItem>
-                      <SelectItem value="calls">Most Calls</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Database className="h-5 w-5" />
+          Query Monitoring
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <Accordion type="single" collapsible className="w-full">
+          <AccordionItem value="configuration">
+            <AccordionTrigger className="hover:no-underline">
+              <div className="flex items-center gap-2">
+                <Activity className="h-4 w-4" />
+                Monitoring Configuration
               </div>
-              <div className="mt-4">
-                {queries.length > 0 ? (
+            </AccordionTrigger>
+            <AccordionContent>
+              <div className="pt-4">
+                {isLoadingConfig ? (
+                  <div className="flex justify-center">
+                    <Loader2 className="h-8 w-8 animate-spin" />
+                  </div>
+                ) : (
                   <div className="space-y-4">
+                    <div className="flex items-center space-x-2">
+                      <Switch
+                        id="monitoring-active"
+                        checked={isMonitoringActive}
+                        onCheckedChange={setIsMonitoringActive}
+                      />
+                      <Label htmlFor="monitoring-active">Enable Query Monitoring</Label>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="interval">Check Interval (minutes)</Label>
+                        <Input
+                          id="interval"
+                          type="number"
+                          min="1"
+                          max="60"
+                          value={intervalMinutes}
+                          onChange={(e) => setIntervalMinutes(parseInt(e.target.value))}
+                        />
+                      </div>
+                      
+                      <div className="flex items-end">
+                        <Button
+                          onClick={handleUpdateConfig}
+                          disabled={updateConfigMutation.isPending}
+                          className="mb-1"
+                        >
+                          {updateConfigMutation.isPending && (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          )}
+                          Save Configuration
+                        </Button>
+                      </div>
+                    </div>
+                    
+                    {config?.lastRunAt && (
+                      <div className="pt-2">
+                        <p className="text-sm text-muted-foreground">
+                          Last run: {formatDistanceToNow(new Date(config.lastRunAt))} ago
+                        </p>
+                      </div>
+                    )}
+                    
+                    <div className="pt-4">
+                      <Button 
+                        onClick={handleStartMonitoring}
+                        disabled={!isMonitoringActive || startMonitoringMutation.isPending}
+                      >
+                        {startMonitoringMutation.isPending ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="mr-2 h-4 w-4" />
+                        )}
+                        Start Monitoring Now
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+          
+          <AccordionItem value="discovered-queries" className="border-t">
+            <AccordionTrigger className="hover:no-underline">
+              <div className="flex items-center gap-2">
+                <Database className="h-4 w-4" />
+                Discovered Queries
+              </div>
+            </AccordionTrigger>
+            <AccordionContent>
+              <div className="pt-4">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center space-x-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowKnown(!showKnown)}
+                      className="flex items-center gap-2"
+                    >
+                      {showKnown ? "Hide Known Queries" : "Show Known Queries"}
+                    </Button>
+                    
+                    <Select 
+                      value={selectedGroupId || ALL_QUERIES} 
+                      onValueChange={(value) => setSelectedGroupId(value)}
+                    >
+                      <SelectTrigger className="w-[180px]">
+                        <SelectValue placeholder="Filter by Group" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={ALL_QUERIES}>All Queries</SelectItem>
+                        <SelectItem value={UNGROUPED}>Ungrouped</SelectItem>
+                        {groups.map((group) => (
+                          <SelectItem key={group.id} value={group.id.toString()}>
+                            {group.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => refetchQueries()}
+                    className="flex items-center gap-2"
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                    Refresh
+                  </Button>
+                </div>
+                
+                {isLoadingQueries ? (
+                  <div className="flex justify-center p-4">
+                    <Loader2 className="h-6 w-6 animate-spin" />
+                  </div>
+                ) : queries.length === 0 ? (
+                  <div className="text-center p-6 border rounded-md">
+                    <p>No queries found.</p>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      {config?.isActive 
+                        ? "Start monitoring to discover queries or adjust your filters."
+                        : "Enable monitoring in the configuration tab, then start monitoring to discover queries."}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="border rounded-md">
                     <ScrollArea className="h-[400px]">
                       <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-[100px]">Status</TableHead>
+                            <TableHead>Query</TableHead>
+                            <TableHead className="w-[150px]">First Seen</TableHead>
+                            <TableHead className="w-[150px]">Last Seen</TableHead>
+                            <TableHead className="w-[100px]">Call Count</TableHead>
+                            <TableHead className="w-[150px]">Group</TableHead>
+                            <TableHead className="w-[150px]">Actions</TableHead>
+                          </TableRow>
+                        </TableHeader>
                         <TableBody>
                           {queries.map((query) => (
                             <TableRow key={query.id}>
-                              <TableCell>{query.name}</TableCell>
-                              <TableCell>{query.group}</TableCell>
-                              <TableCell>{query.status}</TableCell>
-                              <TableCell>{query.lastRun}</TableCell>
                               <TableCell>
-                                <Select>
-                                  <SelectTrigger className="w-[180px]">
-                                    <SelectValue placeholder="Assign to Group" />
+                                {query.isKnown ? (
+                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                    Known
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                                    New
+                                  </span>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                <div className="max-h-20 overflow-y-auto">
+                                  <code className="text-xs whitespace-pre-wrap break-all">
+                                    {query.queryText}
+                                  </code>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                {formatDistanceToNow(new Date(query.firstSeenAt))} ago
+                              </TableCell>
+                              <TableCell>
+                                {formatDistanceToNow(new Date(query.lastSeenAt))} ago
+                              </TableCell>
+                              <TableCell>{query.callCount}</TableCell>
+                              <TableCell>
+                                <Select 
+                                  value={query.groupId?.toString() || UNGROUPED} 
+                                  onValueChange={(value) => handleAssignToGroup(
+                                    query.id, 
+                                    value === UNGROUPED ? null : parseInt(value)
+                                  )}
+                                >
+                                  <SelectTrigger className="w-[120px]">
+                                    <SelectValue placeholder="Ungrouped" />
                                   </SelectTrigger>
                                   <SelectContent>
-                                    <SelectItem value="">Ungrouped</SelectItem>
+                                    <SelectItem value={UNGROUPED}>Ungrouped</SelectItem>
                                     {groups.map((group) => (
                                       <SelectItem key={group.id} value={group.id.toString()}>
                                         {group.name}
@@ -147,28 +663,19 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
                                 </Select>
                               </TableCell>
                               <TableCell>
-                                <div className="flex space-x-2">
-                                  <Button
-                                    variant={query.isKnown ? "outline" : "default"}
-                                    size="sm"
-                                    onClick={() => handleMarkQueryKnown(query.id, !query.isKnown)}
-                                  >
-                                    {query.isKnown ? "Mark as New" : "Mark as Known"}
-                                  </Button>
-                                </div>
+                                <Button
+                                  variant={query.isKnown ? "outline" : "default"}
+                                  size="sm"
+                                  onClick={() => handleMarkQueryKnown(query.id, !query.isKnown)}
+                                >
+                                  {query.isKnown ? "Mark as New" : "Mark as Known"}
+                                </Button>
                               </TableCell>
                             </TableRow>
                           ))}
                         </TableBody>
                       </Table>
                     </ScrollArea>
-                  </div>
-                ) : (
-                  <div className="text-center p-6 border rounded-md">
-                    <p>No queries found.</p>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Start monitoring to discover queries or adjust your filters.
-                    </p>
                   </div>
                 )}
               </div>

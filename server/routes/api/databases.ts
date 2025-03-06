@@ -84,8 +84,20 @@ router.post('/:id/query-monitoring/start', async (req, res) => {
       where: eq(queryMonitoringConfigs.databaseId, databaseId)
     });
     
+    // If config doesn't exist, create a default one
     if (!config) {
-      return res.status(404).json({ error: 'Monitoring configuration not found' });
+      console.log(`No monitoring config found for database ${databaseId}, creating default`);
+      
+      const result = await db.insert(queryMonitoringConfigs).values({
+        databaseId,
+        isActive: true,
+        intervalMinutes: 15,
+        userId: req.user?.id || 1, // Default to user 1 if auth not implemented
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }).returning();
+      
+      console.log('Created default monitoring config:', result);
     }
     
     if (!config.isActive) {
@@ -200,7 +212,11 @@ router.post('/:id/query-monitoring/start', async (req, res) => {
     }
   } catch (error) {
     console.error('Error starting monitoring:', error);
-    return res.status(500).json({ error: 'Failed to start monitoring' });
+    return res.status(500).json({ 
+      error: 'Failed to start monitoring',
+      message: error instanceof Error ? error.message : 'Unknown error',
+      stack: process.env.NODE_ENV === 'development' ? (error as Error).stack : undefined
+    });
   }
 });
 

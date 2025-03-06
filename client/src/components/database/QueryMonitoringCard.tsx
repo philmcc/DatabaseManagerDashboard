@@ -57,9 +57,10 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(ALL_QUERIES);
   const [intervalMinutes, setIntervalMinutes] = useState(15);
   const [isMonitoringActive, setIsMonitoringActive] = useState(false);
+  const [activeAccordion, setActiveAccordion] = useState<string>("monitoring-config");
 
-  // Determine if we're using mocked data
-  const useMockedData = true; // Set to false when API is working
+  // Change mock data flag to false
+  const useMockedData = false;
 
   // Generate test groups
   const generateTestGroups = (): QueryGroup[] => {
@@ -178,12 +179,12 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
   });
 
   // Fetch discovered queries
-  const { data: queries = (useMockedData ? generateTestQueries() : []), isLoading: isLoadingQueries, refetch: refetchQueries } = useQuery({
+  const { data: queries = [], isLoading: isLoadingQueries, refetch: refetchQueries } = useQuery({
     queryKey: [`database-${databaseId}-discovered-queries`, { showKnown, groupId: selectedGroupId }],
     queryFn: async () => {
       if (useMockedData) {
-        // Return an empty array for now, or you could generate test data:
-        return [];
+        // Return mock data consistently
+        return generateTestQueries();
       }
       
       try {
@@ -205,7 +206,9 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
           throw new Error("Failed to fetch discovered queries");
         }
         
-        return await response.json();
+        const data = await response.json();
+        console.log("Queries loaded:", data.length, "items");
+        return data;
       } catch (error) {
         console.error("Error fetching discovered queries:", error);
         toast({
@@ -215,6 +218,9 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
         });
         return [];
       }
+    },
+    onSuccess: (data) => {
+      console.log("Queries loaded:", data.length, "items");
     }
   });
 
@@ -398,8 +404,18 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
   const testApiConnection = async () => {
     try {
       console.log('Testing API connection...');
+      
+      // Log all request details
+      const requestDetails = {
+        url: '/api/test',
+        method: 'GET',
+        timestamp: new Date().toISOString()
+      };
+      console.log('Request details:', requestDetails);
+      
       const response = await fetch('/api/test');
-      console.log('Test API Status:', response.status);
+      console.log('Test API Response Status:', response.status);
+      console.log('Test API Response Headers:', Object.fromEntries([...response.headers.entries()]));
       
       if (!response.ok) {
         const text = await response.text();
@@ -408,7 +424,22 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
       }
       
       const data = await response.json();
-      console.log('API test successful:', data);
+      console.log('API test successful response data:', data);
+      
+      // Now that test is working, let's try query monitoring API
+      console.log('Testing query monitoring API...');
+      const monitoringTestResponse = await fetch(`/api/databases/${databaseId}/query-monitoring/config`);
+      console.log('Monitoring config API status:', monitoringTestResponse.status);
+      
+      if (!monitoringTestResponse.ok) {
+        const errorText = await monitoringTestResponse.text();
+        console.error('Monitoring config API error:', errorText.substring(0, 200));
+        return false;
+      }
+      
+      const configData = await monitoringTestResponse.json();
+      console.log('Monitoring config data:', configData);
+      
       return true;
     } catch (error) {
       console.error('API test error:', error);
@@ -418,14 +449,35 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
 
   const handleStartMonitoring = () => {
     if (useMockedData) {
+      const mockQueries = generateTestQueries();
+      console.log("Generated mock queries:", mockQueries.length, "items");
+      
+      // Simulate API success with mock data
       toast({
         title: "Monitoring Started (Mock)",
-        description: "Using mock data mode - API calls are simulated"
+        description: "Using mock data - showing sample queries"
       });
+      
+      // Update state to show mock queries - use EXACT same query key format
+      queryClient.setQueryData(
+        [`database-${databaseId}-discovered-queries`, { showKnown, groupId: selectedGroupId }], 
+        mockQueries
+      );
+      
+      // After setting query data
+      const updatedData = queryClient.getQueryData([
+        `database-${databaseId}-discovered-queries`, 
+        { showKnown, groupId: selectedGroupId }
+      ]);
+      console.log("Updated query data:", updatedData);
+      
+      // Open the discovered queries accordion
+      setActiveAccordion("discovered-queries");
+      
       return;
     }
     
-    // Test API connection first
+    // Original API call logic
     testApiConnection().then(success => {
       if (success) {
         startMonitoringMutation.mutate();
@@ -433,7 +485,7 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
         toast({
           variant: "destructive",
           title: "API Error",
-          description: "Could not connect to the API. Please check server logs."
+          description: "Could not connect to the API. Check console for details."
         });
       }
     });
@@ -456,8 +508,14 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <Accordion type="single" collapsible className="w-full">
-          <AccordionItem value="configuration">
+        <Accordion 
+          type="single" 
+          collapsible 
+          className="w-full"
+          value={activeAccordion}
+          onValueChange={setActiveAccordion}
+        >
+          <AccordionItem value="monitoring-config">
             <AccordionTrigger className="hover:no-underline">
               <div className="flex items-center gap-2">
                 <Activity className="h-4 w-4" />

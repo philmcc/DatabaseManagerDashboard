@@ -360,3 +360,50 @@ export type SelectDatabaseOperationLog = {
     port: number;
   };
 };
+
+// Add these tables to your schema
+
+export const queryMonitoringConfigs = pgTable("query_monitoring_configs", {
+  id: serial("id").primaryKey(),
+  databaseId: integer("database_id").notNull().references(() => databaseConnections.id, { onDelete: "cascade" }),
+  isActive: boolean("is_active").notNull().default(false),
+  intervalMinutes: integer("interval_minutes").notNull().default(15),
+  lastRunAt: timestamp("last_run_at"),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow()
+});
+
+export const queryGroups = pgTable("query_groups", {
+  id: serial("id").primaryKey(),
+  databaseId: integer("database_id").notNull().references(() => databaseConnections.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  isKnown: boolean("is_known").notNull().default(false),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow()
+});
+
+export const discoveredQueries = pgTable("discovered_queries", {
+  id: serial("id").primaryKey(),
+  databaseId: integer("database_id").notNull().references(() => databaseConnections.id, { onDelete: "cascade" }),
+  queryText: text("query_text").notNull(),
+  queryHash: text("query_hash").notNull(),
+  normalizedQuery: text("normalized_query"),
+  firstSeenAt: timestamp("first_seen_at").notNull(),
+  lastSeenAt: timestamp("last_seen_at").notNull(),
+  callCount: integer("call_count").notNull().default(1),
+  totalTime: numeric("total_time").notNull().default("0"),
+  minTime: numeric("min_time"),
+  maxTime: numeric("max_time"),
+  meanTime: numeric("mean_time"),
+  isKnown: boolean("is_known").notNull().default(false),
+  groupId: integer("group_id").references(() => queryGroups.id),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow()
+});
+
+export type SelectQueryMonitoringConfig = typeof queryMonitoringConfigs.$inferSelect;
+export type SelectQueryGroup = typeof queryGroups.$inferSelect;
+export type SelectDiscoveredQuery = typeof discoveredQueries.$inferSelect;

@@ -23,6 +23,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import QueryMonitoringCard from "@/components/database/QueryMonitoringCard";
 
 interface LogDetails {
   before?: Record<string, any>;
@@ -563,14 +564,12 @@ export default function DatabaseDetails() {
         <Card>
           <Accordion type="single" collapsible>
             <AccordionItem value="logs">
-              <CardHeader>
-                <AccordionTrigger className="w-full">
-                  <CardTitle className="flex items-center gap-2">
-                    <Activity className="h-5 w-5" />
-                    Operation Logs
-                  </CardTitle>
-                </AccordionTrigger>
-              </CardHeader>
+              <AccordionTrigger className="w-full">
+                <CardTitle className="flex items-center gap-2">
+                  <Activity className="h-5 w-5" />
+                  Operation Logs
+                </CardTitle>
+              </AccordionTrigger>
               <AccordionContent>
                 <div className="px-6 py-4">
                   {isLoadingLogs ? (
@@ -763,6 +762,8 @@ export default function DatabaseDetails() {
             </Accordion>
           </CardContent>
         </Card>
+
+        <QueryMonitoringCard databaseId={parseInt(id || "0")} />
       </div>
     </BaseLayout>
   );

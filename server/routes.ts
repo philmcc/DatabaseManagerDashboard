@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { setupAuth } from "./auth";
 import { db } from "@db";
 import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics, clusters, instances, healthCheckQueries, healthCheckExecutions, healthCheckResults, healthCheckReports, queryMonitoringConfigs, discoveredQueries, queryGroups } from "@db/schema";
-import { eq, and, ne, sql, desc, asc, isNull } from "drizzle-orm";
+import { eq, and, ne, sql, desc, asc, isNull, gte, lte } from "drizzle-orm";
 import pg from 'pg';
 import { z } from "zod";
 import express from 'express';
@@ -3110,11 +3110,17 @@ export function registerRoutes(app: Express): Server {
     try {
       const databaseId = parseInt(req.params.id);
       const showKnown = req.query.showKnown === 'true';
-      const groupId = req.query.groupId;
+      const groupId = req.query.groupId as string;
+      const startDate = req.query.startDate as string;
+      const endDate = req.query.endDate as string;
+      const search = req.query.search as string;
       
       console.log(`Fetching discovered queries for database ${databaseId}:`, { 
         showKnown, 
-        groupId 
+        groupId,
+        startDate,
+        endDate,
+        search
       });
       
       // Build the where conditions
@@ -3137,18 +3143,66 @@ export function registerRoutes(app: Express): Server {
       } else if (groupId && groupId !== 'all_queries') {
         whereConditions = and(
           whereConditions,
-          eq(discoveredQueries.groupId, parseInt(groupId as string))
+          eq(discoveredQueries.groupId, parseInt(groupId))
         );
       }
       
+      // Handle date filters
+      if (startDate) {
+        try {
+          const parsedStartDate = new Date(startDate);
+          if (!isNaN(parsedStartDate.getTime())) {
+            whereConditions = and(
+              whereConditions,
+              gte(discoveredQueries.lastSeenAt, parsedStartDate)
+            );
+          }
+        } catch (error) {
+          console.error(`Error parsing start date: ${startDate}`, error);
+        }
+      }
+      
+      if (endDate) {
+        try {
+          const parsedEndDate = new Date(endDate);
+          if (!isNaN(parsedEndDate.getTime())) {
+            whereConditions = and(
+              whereConditions,
+              lte(discoveredQueries.lastSeenAt, parsedEndDate)
+            );
+          }
+        } catch (error) {
+          console.error(`Error parsing end date: ${endDate}`, error);
+        }
+      }
+      
+      // Handle search
+      if (search && search.trim()) {
+        try {
+          const searchPattern = `%${search.trim().replace(/%/g, '\\%').replace(/_/g, '\\_')}%`;
+          whereConditions = and(
+            whereConditions,
+            sql`${discoveredQueries.queryText}::text ILIKE ${searchPattern}`
+          );
+          console.log(`Applied search filter with pattern: ${searchPattern}`);
+        } catch (error) {
+          console.error(`Error applying search filter: ${search}`, error);
+        }
+      }
+      
       // Query the database
-      const queries = await db.query.discoveredQueries.findMany({
-        where: whereConditions,
-        orderBy: [
-          desc(discoveredQueries.lastSeenAt)
-        ],
-        limit: 100 // Limit to prevent loading too many queries
-      });
+      const queries = await db.select()
+        .from(discoveredQueries)
+        .where(whereConditions)
+        .orderBy(desc(discoveredQueries.lastSeenAt))
+        .limit(100);
+      
+      console.log(`Found ${queries.length} queries matching filters`);
+      
+      // Set cache control headers
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       
       return res.json(queries);
     } catch (error) {

@@ -92,14 +92,23 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
       }
     }
     
-    // Search query text
+    // Search query text - add more robust search handling
     if (search && search.trim()) {
-      const searchPattern = `%${search.trim().replace(/[%_]/g, char => `\\${char}`)}%`;
-      whereConditions = and(
-        whereConditions,
-        sql`${discoveredQueries.queryText} ILIKE ${searchPattern}`
-      );
-      logger.info(`Applied search filter with pattern: ${searchPattern}`);
+      try {
+        // Properly escape wildcards for ILIKE
+        const searchPattern = `%${search.trim().replace(/%/g, '\\%').replace(/_/g, '\\_')}%`;
+        
+        // Make sure we're using the right SQL construction for text search
+        whereConditions = and(
+          whereConditions,
+          // Option 1: Using raw SQL for more control
+          sql`(${discoveredQueries.queryText}::text ILIKE ${searchPattern})`
+        );
+        
+        logger.info(`Applied search filter with pattern: ${searchPattern}`);
+      } catch (error) {
+        logger.error(`Error applying search filter '${search}':`, error);
+      }
     }
     
     // Execute the query with all filters
@@ -112,7 +121,20 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     // Log the query results
     logger.info(`Found ${results.length} queries matching filters`);
     
-    return NextResponse.json(results);
+    // At the top of the GET function, add this to prevent browser caching
+    const headers = {
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0'
+    };
+    
+    // And when returning the response:
+    return new Response(JSON.stringify(results), {
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers
+      }
+    });
   } catch (error) {
     logger.error('Error fetching discovered queries:', error);
     return new Response(

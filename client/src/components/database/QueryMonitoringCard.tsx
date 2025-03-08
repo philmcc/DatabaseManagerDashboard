@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -490,6 +490,29 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
     }
   };
 
+  // Add this function to handle search input changes
+  const handleSearchChange = (value: string) => {
+    setSearchQuery(value);
+    // Use a small delay to avoid too many requests during typing
+    clearTimeout(searchTimeoutRef.current);
+    searchTimeoutRef.current = setTimeout(() => {
+      console.log("Search query changed, refetching:", value);
+      refetchQueries();
+    }, 500);
+  };
+
+  // Add this at the top of the component with other state variables
+  const searchTimeoutRef = React.useRef<NodeJS.Timeout>();
+
+  // Clean up the timeout on component unmount
+  useEffect(() => {
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+    };
+  }, []);
+
   return (
     <Card className="mt-6">
       <CardHeader>
@@ -738,14 +761,14 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
                         <Input
                           placeholder="Search query text..."
                           value={searchQuery}
-                          onChange={(e) => setSearchQuery(e.target.value)}
+                          onChange={(e) => handleSearchChange(e.target.value)}
                           className="pl-8"
                         />
                         {searchQuery && (
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => setSearchQuery("")}
+                            onClick={() => handleSearchChange("")}
                             className="absolute right-1 top-1 h-7 w-7 p-0"
                           >
                             <XCircle className="h-4 w-4" />
@@ -755,6 +778,25 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
                     </div>
                   </div>
                 </div>
+                
+                {/* Add a debug component at the end of the filters section */}
+                {process.env.NODE_ENV === 'development' && (
+                  <div className="text-xs text-muted-foreground border-t pt-2 mt-4">
+                    <details>
+                      <summary>Debug Filter Info</summary>
+                      <div className="mt-2 space-y-1">
+                        <div><strong>Show Known:</strong> {showKnown.toString()}</div>
+                        <div><strong>Group ID:</strong> {selectedGroupId || 'all'}</div>
+                        <div><strong>Date Range:</strong> {dateRange}</div>
+                        {customStartDate && <div><strong>Custom Start:</strong> {customStartDate.toISOString()}</div>}
+                        {customEndDate && <div><strong>Custom End:</strong> {customEndDate.toISOString()}</div>}
+                        <div><strong>Search:</strong> "{searchQuery || '(none)'}"</div>
+                        <div><strong>Query Count:</strong> {queries.length}</div>
+                        <div><strong>Last Fetch:</strong> {new Date().toISOString()}</div>
+                      </div>
+                    </details>
+                  </div>
+                )}
                 
                 {isLoadingQueries ? (
                   <div className="flex justify-center p-4">

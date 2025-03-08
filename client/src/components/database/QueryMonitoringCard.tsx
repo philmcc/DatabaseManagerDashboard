@@ -812,83 +812,114 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
                     </p>
                   </div>
                 ) : (
-                  <div className="border rounded-md">
-                    <ScrollArea className="h-[400px]">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead className="w-[100px]">Status</TableHead>
-                            <TableHead>Query</TableHead>
-                            <TableHead className="w-[150px]">First Seen</TableHead>
-                            <TableHead className="w-[150px]">Last Seen</TableHead>
-                            <TableHead className="w-[100px]">Call Count</TableHead>
-                            <TableHead className="w-[150px]">Group</TableHead>
-                            <TableHead className="w-[150px]">Actions</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {queries.map((query) => (
-                            <TableRow key={query.id}>
-                              <TableCell>
-                                {query.isKnown ? (
-                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                    Known
-                                  </span>
-                                ) : (
-                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                                    New
-                                  </span>
-                                )}
-                              </TableCell>
-                              <TableCell>
-                                <div className="max-h-20 overflow-y-auto">
-                                  <code className="text-xs whitespace-pre-wrap break-all">
-                                    {query.queryText}
-                                  </code>
-                                </div>
-                              </TableCell>
-                              <TableCell>
-                                {formatDistanceToNow(new Date(query.firstSeenAt))} ago
-                              </TableCell>
-                              <TableCell>
-                                {formatDistanceToNow(new Date(query.lastSeenAt))} ago
-                              </TableCell>
-                              <TableCell>{query.callCount}</TableCell>
-                              <TableCell>
-                                <Select 
-                                  value={query.groupId?.toString() || UNGROUPED} 
-                                  onValueChange={(value) => handleAssignToGroup(
-                                    query.id, 
-                                    value === UNGROUPED ? null : parseInt(value)
+                  <div className="space-y-3">
+                    {queries.map((query) => (
+                      <div key={query.id} className="border rounded-md overflow-hidden">
+                        <Accordion type="single" collapsible className="w-full">
+                          <AccordionItem value="details" className="border-none">
+                            <AccordionTrigger className="px-4 py-3 hover:no-underline">
+                              <div className="flex items-center justify-between w-full text-left">
+                                <div className="flex items-center gap-3">
+                                  {query.isKnown ? (
+                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                      Known
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                                      New
+                                    </span>
                                   )}
-                                >
-                                  <SelectTrigger className="w-[120px]">
-                                    <SelectValue placeholder="Ungrouped" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value={UNGROUPED}>Ungrouped</SelectItem>
-                                    {groups.map((group) => (
-                                      <SelectItem key={group.id} value={group.id.toString()}>
-                                        {group.name}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </TableCell>
-                              <TableCell>
-                                <Button
-                                  variant={query.isKnown ? "outline" : "default"}
-                                  size="sm"
-                                  onClick={() => handleMarkQueryKnown(query.id, !query.isKnown)}
-                                >
-                                  {query.isKnown ? "Mark as New" : "Mark as Known"}
-                                </Button>
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </ScrollArea>
+                                  <div className="font-mono text-sm truncate max-w-[500px]">
+                                    {query.queryText.split('\n')[0].substring(0, 100)}
+                                    {query.queryText.length > 100 ? '...' : ''}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                                  <div>
+                                    <span className="font-medium">Last seen:</span> {formatDistanceToNow(new Date(query.lastSeenAt))} ago
+                                  </div>
+                                  <div>
+                                    <span className="font-medium">Calls:</span> {query.callCount}
+                                  </div>
+                                </div>
+                              </div>
+                            </AccordionTrigger>
+                            <AccordionContent>
+                              <div className="px-4 pb-4 pt-0 space-y-4">
+                                <div className="bg-muted p-3 rounded-md overflow-x-auto">
+                                  <pre className="text-xs whitespace-pre-wrap break-all">{query.queryText}</pre>
+                                </div>
+                                
+                                <div className="grid grid-cols-2 gap-4">
+                                  <div className="space-y-2">
+                                    <div className="text-sm">
+                                      <span className="font-medium">First seen:</span> {formatDistanceToNow(new Date(query.firstSeenAt))} ago
+                                    </div>
+                                    <div className="text-sm">
+                                      <span className="font-medium">Last seen:</span> {formatDistanceToNow(new Date(query.lastSeenAt))} ago
+                                    </div>
+                                    <div className="text-sm">
+                                      <span className="font-medium">Call count:</span> {query.callCount}
+                                    </div>
+                                  </div>
+                                  
+                                  <div className="space-y-2">
+                                    {query.meanTime !== null && query.meanTime !== undefined && (
+                                      <div className="text-sm">
+                                        <span className="font-medium">Mean time:</span> {typeof query.meanTime === 'number' ? query.meanTime.toFixed(2) : query.meanTime} ms
+                                      </div>
+                                    )}
+                                    {query.minTime !== null && query.minTime !== undefined && (
+                                      <div className="text-sm">
+                                        <span className="font-medium">Min time:</span> {typeof query.minTime === 'number' ? query.minTime.toFixed(2) : query.minTime} ms
+                                      </div>
+                                    )}
+                                    {query.maxTime !== null && query.maxTime !== undefined && (
+                                      <div className="text-sm">
+                                        <span className="font-medium">Max time:</span> {typeof query.maxTime === 'number' ? query.maxTime.toFixed(2) : query.maxTime} ms
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                                
+                                <div className="flex items-center justify-between pt-2 border-t">
+                                  <div className="flex items-center gap-2">
+                                    <Label htmlFor={`group-${query.id}`} className="text-sm">Group:</Label>
+                                    <Select 
+                                      value={query.groupId?.toString() || UNGROUPED} 
+                                      onValueChange={(value) => handleAssignToGroup(
+                                        query.id, 
+                                        value === UNGROUPED ? null : parseInt(value)
+                                      )}
+                                    >
+                                      <SelectTrigger id={`group-${query.id}`} className="w-[180px]">
+                                        <SelectValue placeholder="Ungrouped" />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value={UNGROUPED}>Ungrouped</SelectItem>
+                                        {groups.map((group) => (
+                                          <SelectItem key={group.id} value={group.id.toString()}>
+                                            {group.name}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                  
+                                  <Button
+                                    variant={query.isKnown ? "outline" : "default"}
+                                    size="sm"
+                                    onClick={() => handleMarkQueryKnown(query.id, !query.isKnown)}
+                                  >
+                                    {query.isKnown ? "Mark as New" : "Mark as Known"}
+                                  </Button>
+                                </div>
+                              </div>
+                            </AccordionContent>
+                          </AccordionItem>
+                        </Accordion>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>

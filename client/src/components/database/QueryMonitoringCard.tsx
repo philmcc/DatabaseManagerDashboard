@@ -10,8 +10,11 @@ import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Database, Activity, Plus, RefreshCw } from "lucide-react";
+import { Loader2, Database, Activity, Plus, RefreshCw, CalendarIcon, SearchIcon, XCircle } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
+import { format } from "date-fns";
 
 // Define constants for select values
 const ALL_QUERIES = "all_queries";
@@ -58,6 +61,10 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
   const [intervalMinutes, setIntervalMinutes] = useState(15);
   const [isMonitoringActive, setIsMonitoringActive] = useState(false);
   const [activeAccordion, setActiveAccordion] = useState<string>("monitoring-config");
+  const [dateRange, setDateRange] = useState<string>("all");
+  const [customStartDate, setCustomStartDate] = useState<Date | undefined>(undefined);
+  const [customEndDate, setCustomEndDate] = useState<Date | undefined>(undefined);
+  const [searchQuery, setSearchQuery] = useState<string>("");
 
   // Change mock data flag to false
   const useMockedData = false;
@@ -110,6 +117,81 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
       groupId: i % 5 === 0 ? 1 : null,
     }));
   };
+
+  // Update the fetch queries function to include the new filters
+  const fetchQueries = async () => {
+    if (useMockedData) {
+      return generateTestQueries();
+    }
+    
+    try {
+      // Build query parameters
+      const params = new URLSearchParams();
+      params.append('showKnown', showKnown.toString());
+      
+      if (selectedGroupId && selectedGroupId !== ALL_QUERIES) {
+        params.append('groupId', selectedGroupId);
+      }
+      
+      // Add date range filters
+      if (dateRange === 'hour') {
+        const hourAgo = new Date(Date.now() - 3600000).toISOString();
+        params.append('startDate', hourAgo);
+      } else if (dateRange === 'day') {
+        const dayAgo = new Date(Date.now() - 86400000).toISOString();
+        params.append('startDate', dayAgo);
+      } else if (dateRange === 'week') {
+        const weekAgo = new Date(Date.now() - 604800000).toISOString();
+        params.append('startDate', weekAgo);
+      } else if (dateRange === 'custom' && customStartDate) {
+        params.append('startDate', customStartDate.toISOString());
+        if (customEndDate) {
+          params.append('endDate', customEndDate.toISOString());
+        }
+      }
+      
+      // Add text search
+      if (searchQuery.trim()) {
+        params.append('search', searchQuery.trim());
+      }
+      
+      // Add debug logging
+      console.log('Fetching queries with params:', params.toString());
+      
+      const response = await fetch(`/api/databases/${databaseId}/discovered-queries?${params.toString()}`, {
+        credentials: 'include'
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch queries: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      console.log(`Received ${data.length} queries from API`);
+      return data;
+    } catch (error) {
+      console.error("Error fetching queries:", error);
+      throw error;
+    }
+  };
+
+  // Update the useQuery hook to depend on the new filter parameters
+  const { data: queries = [], isLoading: isLoadingQueries, refetch: refetchQueries } = useQuery({
+    queryKey: [
+      `database-${databaseId}-discovered-queries`, 
+      showKnown, 
+      selectedGroupId, 
+      dateRange,
+      customStartDate?.toISOString(),
+      customEndDate?.toISOString(),
+      searchQuery
+    ],
+    queryFn: fetchQueries,
+    // Add these options to ensure it refetches properly
+    staleTime: 30000, // Consider data stale after 30 seconds
+    refetchOnWindowFocus: false,
+    refetchOnMount: true
+  });
 
   // Use mocked data in queries
   const { data: config, isLoading: isLoadingConfig } = useQuery({
@@ -175,52 +257,6 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
         });
         return [];
       }
-    }
-  });
-
-  // Fetch discovered queries
-  const { data: queries = [], isLoading: isLoadingQueries, refetch: refetchQueries } = useQuery({
-    queryKey: [`database-${databaseId}-discovered-queries`, { showKnown, groupId: selectedGroupId }],
-    queryFn: async () => {
-      if (useMockedData) {
-        // Return mock data consistently
-        return generateTestQueries();
-      }
-      
-      try {
-        const queryParams = new URLSearchParams();
-        queryParams.append("showKnown", showKnown.toString());
-        
-        // Handle special group ID values
-        if (selectedGroupId === UNGROUPED) {
-          queryParams.append("groupId", "ungrouped");
-        } else if (selectedGroupId !== ALL_QUERIES && selectedGroupId) {
-          queryParams.append("groupId", selectedGroupId);
-        }
-        
-        const response = await fetch(
-          `/api/databases/${databaseId}/discovered-queries?${queryParams}`
-        );
-        
-        if (!response.ok) {
-          throw new Error("Failed to fetch discovered queries");
-        }
-        
-        const data = await response.json();
-        console.log("Queries loaded:", data.length, "items");
-        return data;
-      } catch (error) {
-        console.error("Error fetching discovered queries:", error);
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: "Failed to load discovered queries"
-        });
-        return [];
-      }
-    },
-    onSuccess: (data) => {
-      console.log("Queries loaded:", data.length, "items");
     }
   });
 
@@ -443,6 +479,17 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
     assignToGroupMutation.mutate({ queryId, groupId });
   };
 
+  // Also update filter change handlers to use this function
+  const handleDateRangeChange = (range: string) => {
+    setDateRange(range);
+    if (range !== "custom") {
+      setCustomStartDate(undefined);
+      setCustomEndDate(undefined);
+      // Force a refetch after state updates
+      setTimeout(() => refetchQueries(), 0);
+    }
+  };
+
   return (
     <Card className="mt-6">
       <CardHeader>
@@ -546,45 +593,167 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
             </AccordionTrigger>
             <AccordionContent>
               <div className="pt-4">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center space-x-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setShowKnown(!showKnown)}
+                <div className="flex flex-col space-y-4 mb-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center space-x-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowKnown(!showKnown)}
+                        className="flex items-center gap-2"
+                      >
+                        {showKnown ? "Hide Known Queries" : "Show Known Queries"}
+                      </Button>
+                      
+                      <Select 
+                        value={selectedGroupId || ALL_QUERIES} 
+                        onValueChange={(value) => setSelectedGroupId(value)}
+                      >
+                        <SelectTrigger className="w-[180px]">
+                          <SelectValue placeholder="Filter by Group" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={ALL_QUERIES}>All Queries</SelectItem>
+                          <SelectItem value={UNGROUPED}>Ungrouped</SelectItem>
+                          {groups.map((group) => (
+                            <SelectItem key={group.id} value={group.id.toString()}>
+                              {group.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={() => refetchQueries()}
                       className="flex items-center gap-2"
                     >
-                      {showKnown ? "Hide Known Queries" : "Show Known Queries"}
+                      <RefreshCw className="h-4 w-4" />
+                      Refresh
                     </Button>
-                    
-                    <Select 
-                      value={selectedGroupId || ALL_QUERIES} 
-                      onValueChange={(value) => setSelectedGroupId(value)}
-                    >
-                      <SelectTrigger className="w-[180px]">
-                        <SelectValue placeholder="Filter by Group" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value={ALL_QUERIES}>All Queries</SelectItem>
-                        <SelectItem value={UNGROUPED}>Ungrouped</SelectItem>
-                        {groups.map((group) => (
-                          <SelectItem key={group.id} value={group.id.toString()}>
-                            {group.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
                   </div>
                   
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={() => refetchQueries()}
-                    className="flex items-center gap-2"
-                  >
-                    <RefreshCw className="h-4 w-4" />
-                    Refresh
-                  </Button>
+                  {/* New Date Range Filter */}
+                  <div className="flex items-center space-x-2">
+                    <Label className="w-24">Time Range:</Label>
+                    <div className="flex flex-wrap gap-2">
+                      <Button 
+                        variant={dateRange === "all" ? "default" : "outline"} 
+                        size="sm" 
+                        onClick={() => handleDateRangeChange("all")}
+                      >
+                        All Time
+                      </Button>
+                      <Button 
+                        variant={dateRange === "hour" ? "default" : "outline"} 
+                        size="sm" 
+                        onClick={() => handleDateRangeChange("hour")}
+                      >
+                        Last Hour
+                      </Button>
+                      <Button 
+                        variant={dateRange === "day" ? "default" : "outline"} 
+                        size="sm" 
+                        onClick={() => handleDateRangeChange("day")}
+                      >
+                        Last Day
+                      </Button>
+                      <Button 
+                        variant={dateRange === "week" ? "default" : "outline"} 
+                        size="sm" 
+                        onClick={() => handleDateRangeChange("week")}
+                      >
+                        Last Week
+                      </Button>
+                      <Button 
+                        variant={dateRange === "custom" ? "default" : "outline"} 
+                        size="sm" 
+                        onClick={() => {
+                          handleDateRangeChange("custom");
+                          if (!customStartDate) setCustomStartDate(new Date(Date.now() - 86400000)); // Default to last 24 hours
+                          if (!customEndDate) setCustomEndDate(new Date());
+                        }}
+                      >
+                        Custom
+                      </Button>
+                    </div>
+                  </div>
+                  
+                  {/* Custom Date Range Picker - show only when custom is selected */}
+                  {dateRange === "custom" && (
+                    <div className="flex items-center space-x-2">
+                      <Label className="w-24">Custom Range:</Label>
+                      <div className="flex items-center gap-2">
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <Button
+                              variant="outline"
+                              className="w-[180px] justify-start text-left font-normal"
+                            >
+                              <CalendarIcon className="mr-2 h-4 w-4" />
+                              {customStartDate ? format(customStartDate, "PPP") : "Start date"}
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-auto p-0">
+                            <Calendar
+                              mode="single"
+                              selected={customStartDate}
+                              onSelect={setCustomStartDate}
+                              initialFocus
+                            />
+                          </PopoverContent>
+                        </Popover>
+                        <span>to</span>
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <Button
+                              variant="outline"
+                              className="w-[180px] justify-start text-left font-normal"
+                            >
+                              <CalendarIcon className="mr-2 h-4 w-4" />
+                              {customEndDate ? format(customEndDate, "PPP") : "End date"}
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-auto p-0">
+                            <Calendar
+                              mode="single"
+                              selected={customEndDate}
+                              onSelect={setCustomEndDate}
+                              initialFocus
+                            />
+                          </PopoverContent>
+                        </Popover>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Search Box */}
+                  <div className="flex items-center space-x-2">
+                    <Label className="w-24">Search Query:</Label>
+                    <div className="flex-1">
+                      <div className="relative">
+                        <SearchIcon className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                        <Input
+                          placeholder="Search query text..."
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          className="pl-8"
+                        />
+                        {searchQuery && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setSearchQuery("")}
+                            className="absolute right-1 top-1 h-7 w-7 p-0"
+                          >
+                            <XCircle className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 
                 {isLoadingQueries ? (

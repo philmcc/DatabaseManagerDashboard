@@ -360,3 +360,99 @@ export type SelectDatabaseOperationLog = {
     port: number;
   };
 };
+
+// Add these tables to your schema
+
+export const queryMonitoringConfigs = pgTable("query_monitoring_configs", {
+  id: serial("id").primaryKey(),
+  databaseId: integer("database_id").notNull().references(() => databaseConnections.id, { onDelete: 'cascade' }),
+  isActive: boolean("is_active").notNull().default(false),
+  intervalMinutes: integer("interval_minutes").notNull().default(15),
+  lastRunAt: timestamp("last_run_at"),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const queryGroups = pgTable("query_groups", {
+  id: serial("id").primaryKey(),
+  databaseId: integer("database_id").notNull().references(() => databaseConnections.id, { onDelete: 'cascade' }),
+  name: text("name").notNull(),
+  description: text("description"),
+  isKnown: boolean("is_known").notNull().default(false),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const discoveredQueries = pgTable("discovered_queries", {
+  id: serial("id").primaryKey(),
+  databaseId: integer("database_id").notNull().references(() => databaseConnections.id, { onDelete: 'cascade' }),
+  queryText: text("query_text").notNull(),
+  queryHash: text("query_hash").notNull(),
+  normalizedQuery: text("normalized_query"),
+  firstSeenAt: timestamp("first_seen_at").notNull().defaultNow(),
+  lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
+  callCount: integer("call_count").notNull().default(1),
+  totalTime: numeric("total_time").notNull().default('0'),
+  minTime: numeric("min_time"),
+  maxTime: numeric("max_time"),
+  meanTime: numeric("mean_time"),
+  isKnown: boolean("is_known").notNull().default(false),
+  groupId: integer("group_id").references(() => queryGroups.id),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export type SelectQueryMonitoringConfig = typeof queryMonitoringConfigs.$inferSelect;
+export type SelectQueryGroup = typeof queryGroups.$inferSelect;
+export type SelectDiscoveredQuery = typeof discoveredQueries.$inferSelect;
+
+// Add query monitoring relations after line 408 (at the end of the file)
+// Relations for query monitoring tables
+export const queryMonitoringConfigRelations = relations(queryMonitoringConfigs, ({ one, many }) => ({
+  database: one(databaseConnections, {
+    fields: [queryMonitoringConfigs.databaseId],
+    references: [databaseConnections.id],
+  }),
+  user: one(users, {
+    fields: [queryMonitoringConfigs.userId],
+    references: [users.id],
+  }),
+}));
+
+export const queryGroupRelations = relations(queryGroups, ({ one, many }) => ({
+  database: one(databaseConnections, {
+    fields: [queryGroups.databaseId],
+    references: [databaseConnections.id],
+  }),
+  user: one(users, {
+    fields: [queryGroups.userId],
+    references: [users.id],
+  }),
+  queries: many(discoveredQueries),
+}));
+
+export const discoveredQueryRelations = relations(discoveredQueries, ({ one }) => ({
+  database: one(databaseConnections, {
+    fields: [discoveredQueries.databaseId],
+    references: [databaseConnections.id],
+  }),
+  group: one(queryGroups, {
+    fields: [discoveredQueries.groupId],
+    references: [queryGroups.id],
+  }),
+}));
+
+// Create schemas for query monitoring tables
+export const insertQueryMonitoringConfigSchema = createInsertSchema(queryMonitoringConfigs);
+export const selectQueryMonitoringConfigSchema = createSelectSchema(queryMonitoringConfigs);
+export const insertQueryGroupSchema = createInsertSchema(queryGroups);
+export const selectQueryGroupSchema = createSelectSchema(queryGroups);
+export const insertDiscoveredQuerySchema = createInsertSchema(discoveredQueries);
+export const selectDiscoveredQuerySchema = createSelectSchema(discoveredQueries);
+
+// Define types for query monitoring tables
+export type InsertQueryMonitoringConfig = typeof queryMonitoringConfigs.$inferInsert;
+export type InsertQueryGroup = typeof queryGroups.$inferInsert;
+export type InsertDiscoveredQuery = typeof discoveredQueries.$inferInsert;

@@ -23,6 +23,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import QueryMonitoringCard from "@/components/database/QueryMonitoringCard";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 
 interface LogDetails {
   before?: Record<string, any>;
@@ -82,6 +85,7 @@ export default function DatabaseDetails() {
   const [isContinuousKilling, setIsContinuousKilling] = useState(false);
   const [continuousKillCount, setContinuousKillCount] = useState(0);
   const [continuousKillStartTime, setContinuousKillStartTime] = useState<string | null>(null);
+  const [autoRefreshQueries, setAutoRefreshQueries] = useState(false);
 
   const { data: database, isLoading: isLoadingDatabase } = useQuery<SelectDatabaseConnection & {
     instance: {
@@ -100,7 +104,7 @@ export default function DatabaseDetails() {
 
   const { data: runningQueries = [], isLoading: isLoadingQueries } = useQuery<RunningQuery[]>({
     queryKey: [`/api/databases/${id}/running-queries`],
-    refetchInterval: 5000, // Refresh every 5 seconds
+    refetchInterval: autoRefreshQueries ? 5000 : undefined,
   });
 
   const logs = logsData?.logs || [];
@@ -563,14 +567,12 @@ export default function DatabaseDetails() {
         <Card>
           <Accordion type="single" collapsible>
             <AccordionItem value="logs">
-              <CardHeader>
-                <AccordionTrigger className="w-full">
-                  <CardTitle className="flex items-center gap-2">
-                    <Activity className="h-5 w-5" />
-                    Operation Logs
-                  </CardTitle>
-                </AccordionTrigger>
-              </CardHeader>
+              <AccordionTrigger className="w-full">
+                <CardTitle className="flex items-center gap-2">
+                  <Activity className="h-5 w-5" />
+                  Operation Logs
+                </CardTitle>
+              </AccordionTrigger>
               <AccordionContent>
                 <div className="px-6 py-4">
                   {isLoadingLogs ? (
@@ -674,7 +676,18 @@ export default function DatabaseDetails() {
                 </AccordionTrigger>
                 <AccordionContent>
                   <div className="pt-4">
-                    <div className="flex justify-end mb-4">
+                    <div className="flex justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                        <Switch
+                          id="auto-refresh-queries"
+                          checked={autoRefreshQueries}
+                          onCheckedChange={setAutoRefreshQueries}
+                        />
+                        <Label htmlFor="auto-refresh-queries">
+                          Auto-refresh queries {autoRefreshQueries ? '(every 5s)' : '(off)'}
+                        </Label>
+                      </div>
+                      
                       {continuousKillSignature && (
                         <div className="flex items-center gap-2 mr-auto">
                           <Button
@@ -689,6 +702,7 @@ export default function DatabaseDetails() {
                           </span>
                         </div>
                       )}
+                      
                       <Button
                         variant="outline"
                         size="sm"
@@ -763,6 +777,8 @@ export default function DatabaseDetails() {
             </Accordion>
           </CardContent>
         </Card>
+
+        <QueryMonitoringCard databaseId={parseInt(id || "0")} />
       </div>
     </BaseLayout>
   );

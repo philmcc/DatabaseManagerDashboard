@@ -27,4 +27,13 @@ export const apiRequest = async (endpoint: string, options: RequestInit = {}) =>
   
   // Parse JSON response
   return await response.json();
-}; 
+};
+
+export const api = {
+  databases: {
+    test: (id) => fetch(`/api/databases/${id}/test`, { method: 'POST' }),
+    metrics: (id) => fetch(`/api/databases/${id}/metrics`),
+    // ...
+  },
+  // Other API endpoints
+} 

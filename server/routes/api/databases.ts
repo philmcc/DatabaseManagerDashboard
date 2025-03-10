@@ -4,6 +4,8 @@ import { queryMonitoringConfigs, queryGroups, discoveredQueries } from '@/db/sch
 import { eq, and, isNull, desc, gte, lte, sql } from 'drizzle-orm';
 import { getDatabaseConnection } from '@/lib/database';
 import crypto from 'crypto';
+import queryMonitoringRouter from './query-monitoring';
+import { requireAuth } from '@/lib/auth';
 
 const router = express.Router();
 
@@ -399,6 +401,22 @@ router.patch('/:id/discovered-queries', async (req, res) => {
     console.error('Error updating discovered query:', error);
     return res.status(500).json({ error: 'Failed to update query' });
   }
+});
+
+// Mount the query monitoring routes
+router.use('/:id/query-monitoring', queryMonitoringRouter);
+
+// Add these routes to the router
+router.post('/:id/test', requireAuth, async (req, res) => {
+  // Implementation from routes.ts
+});
+
+router.get('/:id/metrics', requireAuth, async (req, res) => {
+  // Implementation from routes.ts
+});
+
+router.post('/:id/kill-query', requireAuth, async (req, res) => {
+  // Implementation from routes.ts
 });
 
 export default router; 

@@ -20,4 +20,14 @@ export default defineConfig({
     outDir: path.resolve(__dirname, "dist/public"),
     emptyOutDir: true,
   },
+  server: {
+    hmr: {
+      protocol: 'ws',
+      host: 'localhost',
+    },
+    fs: {
+      strict: false,
+    },
+  },
+  logLevel: 'warn',
 });

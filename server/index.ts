@@ -2,53 +2,20 @@ import 'dotenv/config';
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import { requestLogger } from './middleware/request-logger';
+import { errorHandler } from './middleware/error-handler';
+import { logger } from './utils/logger';
 
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-app.use((req, res, next) => {
-  console.log(`[INCOMING REQUEST] ${req.method} ${req.url}`);
-  const start = Date.now();
-  const path = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
-
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
-  };
-
-  res.on("finish", () => {
-    const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
-
-      if (logLine.length > 80) {
-        logLine = logLine.slice(0, 79) + "…";
-      }
-
-      log(logLine);
-    }
-  });
-
-  console.log(`${req.method} ${req.url}`);
-  next();
-});
+app.use(requestLogger);
 
 (async () => {
   const server = registerRoutes(app);
 
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
-
-    res.status(status).json({ message });
-    throw err;
-  });
+  app.use(errorHandler);
 
   // importantly only setup vite in development and after
   // setting up all the other routes so the catch-all route
@@ -59,10 +26,39 @@ app.use((req, res, next) => {
     serveStatic(app);
   }
 
-  // ALWAYS serve the app on port 5000
-  // this serves both the API and the client
-  const PORT = process.env.PORT || 5001;
-  server.listen(PORT, "0.0.0.0", () => {
-    log(`serving on port ${PORT}`);
-  });
+  // Use the originally configured port, falling back to alternatives if needed
+  const DEFAULT_PORT = process.env.PORT || 5001;
+  const FALLBACK_PORTS = [5002, 5003, 5004, 5005];
+  
+  // Try the default port first, then fallbacks if needed
+  function startServer(port: number, fallbacks: number[] = []) {
+    server.listen(port, "0.0.0.0")
+      .on("error", (err: any) => {
+        if (err.code === 'EADDRINUSE') {
+          // Port is in use
+          logger.warn(`Port ${port} is already in use`);
+          
+          if (fallbacks.length > 0) {
+            // Try the next port in the fallback list
+            const nextPort = fallbacks[0];
+            logger.info(`Trying port ${nextPort} instead...`);
+            startServer(nextPort, fallbacks.slice(1));
+          } else {
+            // No more fallbacks available
+            logger.error("All ports are in use. Please close other applications or specify a different port.");
+            process.exit(1);
+          }
+        } else {
+          // Some other error occurred
+          logger.error(`Failed to start server: ${err.message}`);
+          process.exit(1);
+        }
+      })
+      .on("listening", () => {
+        logger.info(`Server running on port ${port}`);
+      });
+  }
+  
+  // Start the server with fallback ports
+  startServer(Number(DEFAULT_PORT), FALLBACK_PORTS);
 })();

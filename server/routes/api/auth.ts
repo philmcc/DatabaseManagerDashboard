@@ -4,6 +4,7 @@ import { users } from '@db/schema';
 import { db } from '@db';
 import { eq } from 'drizzle-orm';
 import { hash } from '../../lib/crypto';
+import { logger } from '../../utils/logger';
 
 const router = express.Router();
 
@@ -11,10 +12,12 @@ const router = express.Router();
 router.post('/login', (req, res, next) => {
   passport.authenticate('local', (err, user, info) => {
     if (err) {
+      logger.error(`Login error: ${err.message}`);
       return next(err);
     }
     
     if (!user) {
+      logger.info(`Failed login: ${req.body.username}`);
       return res.status(401).json({ 
         success: false,
         message: info?.message || 'Authentication failed'
@@ -23,9 +26,11 @@ router.post('/login', (req, res, next) => {
     
     req.login(user, (err) => {
       if (err) {
+        logger.error(`Session creation error: ${err.message}`);
         return next(err);
       }
       
+      logger.info(`User ${user.username} logged in`);
       return res.json({
         success: true,
         user: {

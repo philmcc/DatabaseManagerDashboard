@@ -120,57 +120,94 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
 
   // Update the fetch queries function to include the new filters
   const fetchQueries = async () => {
-    if (useMockedData) {
-      return generateTestQueries();
-    }
-    
     try {
-      // Build query parameters
-      const params = new URLSearchParams();
-      params.append('showKnown', showKnown.toString());
-      
-      if (selectedGroupId && selectedGroupId !== ALL_QUERIES) {
-        params.append('groupId', selectedGroupId);
-      }
-      
-      // Add date range filters
-      if (dateRange === 'hour') {
-        const hourAgo = new Date(Date.now() - 3600000).toISOString();
-        params.append('startDate', hourAgo);
-      } else if (dateRange === 'day') {
-        const dayAgo = new Date(Date.now() - 86400000).toISOString();
-        params.append('startDate', dayAgo);
-      } else if (dateRange === 'week') {
-        const weekAgo = new Date(Date.now() - 604800000).toISOString();
-        params.append('startDate', weekAgo);
-      } else if (dateRange === 'custom' && customStartDate) {
-        params.append('startDate', customStartDate.toISOString());
-        if (customEndDate) {
-          params.append('endDate', customEndDate.toISOString());
-        }
-      }
-      
-      // Add text search
-      if (searchQuery.trim()) {
-        params.append('search', searchQuery.trim());
-      }
-      
-      // Add debug logging
-      console.log('Fetching queries with params:', params.toString());
-      
-      const response = await fetch(`/api/databases/${databaseId}/discovered-queries?${params.toString()}`, {
-        credentials: 'include'
+      console.log('Fetching queries for database', databaseId, {
+        showKnown,
+        dateRange,
+        selectedGroupId,
+        searchQuery
       });
       
+      // Construct URL with query parameters
+      let apiUrl = `/api/databases/${databaseId}/discovered-queries`;
+      
+      // Add query parameters
+      const params = new URLSearchParams();
+      
+      // Handle date range filter
+      if (dateRange !== 'all') {
+        let startDate: Date | undefined;
+        let endDate: Date | undefined = new Date(); // Default end date is now
+        
+        // Calculate start date based on selected range
+        const now = new Date();
+        switch (dateRange) {
+          case 'today':
+            startDate = new Date(now.setHours(0, 0, 0, 0));
+            break;
+          case 'yesterday':
+            startDate = new Date(now.setDate(now.getDate() - 1));
+            startDate.setHours(0, 0, 0, 0);
+            endDate = new Date(now.setHours(23, 59, 59, 999));
+            break;
+          case 'week':
+            startDate = new Date(now);
+            startDate.setDate(now.getDate() - 7);
+            break;
+          case 'month':
+            startDate = new Date(now);
+            startDate.setMonth(now.getMonth() - 1);
+            break;
+          case 'custom':
+            // For custom range, use the custom date selectors
+            startDate = customStartDate;
+            endDate = customEndDate;
+            break;
+        }
+        
+        // Add date parameters if available
+        if (startDate) params.append('startDate', startDate.toISOString());
+        if (endDate) params.append('endDate', endDate.toISOString());
+        
+        console.log('Date range filter:', { range: dateRange, startDate, endDate });
+      } else {
+        // When "all" is selected, don't add date filters
+        console.log('Using "all time" filter - no date restrictions');
+      }
+      
+      // Add other filters
+      if (searchQuery) params.append('search', searchQuery);
+      if (selectedGroupId && selectedGroupId !== ALL_QUERIES) {
+        params.append('groupId', selectedGroupId === UNGROUPED ? 'null' : selectedGroupId);
+      }
+      
+      // Add show known parameter - always include this
+      params.append('showKnown', showKnown.toString());
+      console.log(`Setting showKnown=${showKnown}`);
+      
+      const queryString = params.toString();
+      if (queryString) {
+        apiUrl = `${apiUrl}?${queryString}`;
+      }
+      
+      console.log('Fetching from URL:', apiUrl);
+      
+      const response = await fetch(apiUrl);
+      
+      // Log response status
+      console.log('Query fetch response status:', response.status);
+      
       if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Error response from server:', errorText);
         throw new Error(`Failed to fetch queries: ${response.status}`);
       }
       
       const data = await response.json();
-      console.log(`Received ${data.length} queries from API`);
+      console.log(`Fetched ${data.length} queries`);
       return data;
     } catch (error) {
-      console.error("Error fetching queries:", error);
+      console.error('Error fetching queries:', error);
       throw error;
     }
   };

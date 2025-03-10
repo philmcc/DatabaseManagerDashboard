@@ -3237,100 +3237,104 @@ export function registerRoutes(app: Express): Server {
   app.get("/api/databases/:id/discovered-queries", requireAuth, async (req, res) => {
     try {
       const databaseId = parseInt(req.params.id);
+      console.log(`Fetching discovered queries for database ${databaseId} with params:`, req.query);
+
+      // Parse query parameters
+      const startDate = req.query.startDate ? new Date(req.query.startDate as string) : undefined;
+      const endDate = req.query.endDate ? new Date(req.query.endDate as string) : undefined;
+      const search = req.query.search as string | undefined;
+      const groupIdParam = req.query.groupId as string | undefined;
       const showKnown = req.query.showKnown === 'true';
-      const groupId = req.query.groupId as string;
-      const startDate = req.query.startDate as string;
-      const endDate = req.query.endDate as string;
-      const search = req.query.search as string;
       
-      console.log(`Fetching discovered queries for database ${databaseId}:`, { 
-        showKnown, 
-        groupId,
-        startDate,
-        endDate,
-        search
+      // Log the parsed parameters
+      console.log('Parsed parameters:', {
+        startDate: startDate?.toISOString(),
+        endDate: endDate?.toISOString(),
+        search,
+        groupIdParam,
+        showKnown
       });
       
-      // Build the where conditions
-      let whereConditions = eq(discoveredQueries.databaseId, databaseId);
+      // Build query conditions
+      let conditions = [eq(discoveredQueries.databaseId, databaseId)];
       
-      // Handle known/unknown filter
-      if (!showKnown) {
-        whereConditions = and(
-          whereConditions,
+      // Add show known filter - debug what's actually in the database
+      const knownQueryCount = await db.select({count: sql`count(*)`})
+        .from(discoveredQueries)
+        .where(and(
+          eq(discoveredQueries.databaseId, databaseId),
+          eq(discoveredQueries.isKnown, true)
+        ));
+      
+      const unknownQueryCount = await db.select({count: sql`count(*)`})
+        .from(discoveredQueries)
+        .where(and(
+          eq(discoveredQueries.databaseId, databaseId),
           eq(discoveredQueries.isKnown, false)
-        );
+        ));
+      
+      console.log(`Database contains ${knownQueryCount[0]?.count || 0} known queries and ${unknownQueryCount[0]?.count || 0} unknown queries`);
+      
+      // Add show known filter - make sure this is working correctly
+      if (!showKnown) {
+        conditions.push(eq(discoveredQueries.isKnown, false));
+        console.log('Adding filter: only show unknown queries');
+      } else {
+        console.log('Showing both known and unknown queries');
       }
       
-      // Handle group filter
-      if (groupId === 'ungrouped') {
-        whereConditions = and(
-          whereConditions,
-          isNull(discoveredQueries.groupId)
-        );
-      } else if (groupId && groupId !== 'all_queries') {
-        whereConditions = and(
-          whereConditions,
-          eq(discoveredQueries.groupId, parseInt(groupId))
-        );
-      }
-      
-      // Handle date filters
+      // Rest of the code remains the same
       if (startDate) {
-        try {
-          const parsedStartDate = new Date(startDate);
-          if (!isNaN(parsedStartDate.getTime())) {
-            whereConditions = and(
-              whereConditions,
-              gte(discoveredQueries.lastSeenAt, parsedStartDate)
-            );
-          }
-        } catch (error) {
-          console.error(`Error parsing start date: ${startDate}`, error);
-        }
+        conditions.push(gte(discoveredQueries.lastSeenAt, startDate));
       }
       
       if (endDate) {
-        try {
-          const parsedEndDate = new Date(endDate);
-          if (!isNaN(parsedEndDate.getTime())) {
-            whereConditions = and(
-              whereConditions,
-              lte(discoveredQueries.lastSeenAt, parsedEndDate)
-            );
-          }
-        } catch (error) {
-          console.error(`Error parsing end date: ${endDate}`, error);
-        }
+        conditions.push(lte(discoveredQueries.lastSeenAt, endDate));
       }
       
-      // Handle search
-      if (search && search.trim()) {
-        try {
-          const searchPattern = `%${search.trim().replace(/%/g, '\\%').replace(/_/g, '\\_')}%`;
-          whereConditions = and(
-            whereConditions,
-            sql`${discoveredQueries.queryText}::text ILIKE ${searchPattern}`
-          );
-          console.log(`Applied search filter with pattern: ${searchPattern}`);
-        } catch (error) {
-          console.error(`Error applying search filter: ${search}`, error);
-        }
+      if (search) {
+        conditions.push(sql`${discoveredQueries.queryText} ILIKE ${`%${search}%`}`);
       }
       
-      // Query the database
-      const queries = await db.select()
-        .from(discoveredQueries)
-        .where(whereConditions)
-        .orderBy(desc(discoveredQueries.lastSeenAt))
-        .limit(100);
+      // Handle group filtering
+      if (groupIdParam === 'null') {
+        conditions.push(isNull(discoveredQueries.groupId));
+      } else if (groupIdParam) {
+        conditions.push(eq(discoveredQueries.groupId, parseInt(groupIdParam)));
+      }
       
-      console.log(`Found ${queries.length} queries matching filters`);
+      // Log the SQL query in a readable form (if possible)
+      console.log('Query conditions:', conditions);
       
-      // Set cache control headers
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      res.setHeader('Pragma', 'no-cache');
-      res.setHeader('Expires', '0');
+      // Execute the query
+      const queries = await db.query.discoveredQueries.findMany({
+        where: and(...conditions),
+        orderBy: [desc(discoveredQueries.lastSeenAt)],
+        limit: 1000
+      });
+      
+      console.log(`Found ${queries.length} queries matching the criteria`);
+      
+      // Additional debugging
+      if (queries.length === 0 && !showKnown) {
+        console.log('No queries found with isKnown=false. Checking query validity...');
+        
+        // Check if we have any queries without time filters
+        const checkQueries = await db.query.discoveredQueries.findMany({
+          where: and(
+            eq(discoveredQueries.databaseId, databaseId),
+            eq(discoveredQueries.isKnown, false)
+          ),
+          limit: 5
+        });
+        
+        if (checkQueries.length > 0) {
+          console.log(`Found ${checkQueries.length} queries when only filtering by isKnown=false. Something is wrong with other filters.`);
+          console.log('Sample query:', checkQueries[0]);
+        } else {
+          console.log('No queries found with isKnown=false at all. Check database data.');
+        }
+      }
       
       return res.json(queries);
     } catch (error) {

@@ -1,5 +1,10 @@
 import express from "express";
+import { sql } from "drizzle-orm";
 import databasesRouter from "./api/databases";
+import authRouter from "./api/auth";
+import usersRouter from "./api/users";
+import clustersRouter from "./api/clusters";
+import instancesRouter from "./api/instances";
 
 export function registerRoutes(app: express.Express) {
   // Add this before registering the routes
@@ -21,8 +26,12 @@ export function registerRoutes(app: express.Express) {
     next();
   });
   
-  // Register the databases API routes
+  // Register API routes
+  app.use('/api/auth', authRouter);
+  app.use('/api/users', usersRouter);
   app.use('/api/databases', databasesRouter);
+  app.use('/api/clusters', clustersRouter);
+  app.use('/api/instances', instancesRouter);
   
   // Simple ping route for testing API connectivity
   app.get('/api/ping', (req, res) => {

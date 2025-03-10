@@ -48,9 +48,11 @@ function Router() {
         <Route path="/:rest*" component={AuthPage} />
       ) : (
         <>
-          <Route path="/" component={Dashboard} />
-          <Route path="/profile-settings" component={ProfileSettings} />
+          <Route path="/" exact>
+            {() => <Redirect to="/dashboard" />}
+          </Route>
           <Route path="/dashboard" component={Dashboard} />
+          <Route path="/profile-settings" component={ProfileSettings} />
           <Route path="/logs" component={LogsPage} />
           <Route path="/tags" component={TagsPage} />
           <Route path="/databases/new">

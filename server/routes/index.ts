@@ -5,26 +5,11 @@ import authRouter from "./api/auth";
 import usersRouter from "./api/users";
 import clustersRouter from "./api/clusters";
 import instancesRouter from "./api/instances";
+import { logger } from "../utils/auth-logging";
 
 export function registerRoutes(app: express.Express) {
-  // Add this before registering the routes
-  app.use('/api', (req, res, next) => {
-    console.log(`[DEBUG] API REQUEST: ${req.method} ${req.path}`);
-    
-    // Track response
-    const originalSend = res.send;
-    res.send = function(body) {
-      console.log(`[DEBUG] API RESPONSE: ${res.statusCode} for ${req.method} ${req.path}`);
-      if (typeof body === 'string' && body.length < 500) {
-        console.log(`[DEBUG] Response body: ${body}`);
-      } else {
-        console.log(`[DEBUG] Response body too large to log`);
-      }
-      return originalSend.call(this, body);
-    };
-    
-    next();
-  });
+  // We've moved request logging to the requestLogger middleware
+  // No need for API logging middleware here anymore
   
   // Register API routes
   app.use('/api/auth', authRouter);
@@ -68,6 +53,18 @@ export function registerRoutes(app: express.Express) {
       });
     }
   });
+  
+  // Find and modify any authentication middleware
+  const authMiddleware = (req, res, next) => {
+    // Authentication check removed
+    
+    if (req.isAuthenticated()) {
+      return next();
+    }
+    
+    logger.warn(`Authentication failed for ${req.path}`);
+    res.status(401).json({ message: 'Unauthorized' });
+  };
   
   // Return the app for chaining
   return app;

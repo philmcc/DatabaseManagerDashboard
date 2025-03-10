@@ -15,18 +15,14 @@ const { Pool, Client } = pg;
 
 // Update all authentication middleware functions
 function requireAuth(req: Express.Request, res: Express.Response, next: Express.NextFunction) {
-  console.log('Checking authentication:', {
-    isAuthenticated: req.isAuthenticated(),
-    user: req.user,
-    session: req.session
-  });
+  // Authentication check
   
   if (!req.isAuthenticated()) {
-    console.log('Authentication failed - user not authenticated');
+    logger.warn('Authentication failed for path: ' + req.path);
     return res.status(401).json({ error: "Not authenticated" });
   }
   
-  console.log('Authentication successful for user:', req.user);
+  // User authenticated
   next();
 }
 

@@ -1,8 +1,14 @@
 import { Request, Response, NextFunction } from 'express';
+import { logger } from '../utils/logger';
 
 export function errorHandler(err: any, req: Request, res: Response, next: NextFunction) {
-  // Log error
-  console.error('API Error:', err);
+  // Simplified error logging
+  logger.error(`API error: ${err.message}`, {
+    path: req.path,
+    method: req.method,
+    statusCode: err.statusCode || 500,
+    name: err.name
+  });
   
   // Handle specific error types
   if (err.name === 'ValidationError') {

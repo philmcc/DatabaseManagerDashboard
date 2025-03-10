@@ -1,5 +1,6 @@
 import { db } from '@/db';
 import { getDatabaseConnection } from '@/lib/database';
+import { logger } from './logger';
 
 export async function getQueryStatistics(databaseId: number) {
   try {
@@ -7,6 +8,7 @@ export async function getQueryStatistics(databaseId: number) {
     // Common query statistics function
     // ...
   } catch (error) {
+    logger.error(`Database statistics error: ${error.message}`, { databaseId });
     throw new Error(`Failed to get database statistics: ${error.message}`);
   }
 }
@@ -19,6 +21,7 @@ export async function checkPgStatStatementsExtension(databaseId: number) {
     );
     return result.rows.length > 0;
   } catch (error) {
+    logger.error(`Extension check error: ${error.message}`, { databaseId });
     throw new Error(`Failed to check pg_stat_statements: ${error.message}`);
   }
 } 

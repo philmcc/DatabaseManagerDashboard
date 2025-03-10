@@ -320,13 +320,17 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
         
         console.log('API Response Status:', response.status);
         
+        // Enhanced error logging
         if (!response.ok) {
           const errorText = await response.text();
-          console.error('API Error Response:', errorText.substring(0, 200));
-          throw new Error(`Failed to start monitoring: ${response.status}`);
+          console.error('API Error Response:', errorText.substring(0, 500));
+          console.error('Response headers:', Object.fromEntries([...response.headers]));
+          throw new Error(`Failed to start monitoring: ${response.status} - ${errorText.substring(0, 100)}`);
         }
         
-        return await response.json();
+        const data = await response.json();
+        console.log('API Response Data:', data);
+        return data;
       } catch (error) {
         console.error("Error starting monitoring:", error);
         throw error;

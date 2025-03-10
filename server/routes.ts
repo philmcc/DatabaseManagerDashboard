@@ -10,6 +10,7 @@ import express from 'express';
 import { SSHTunnel } from "./lib/ssh-tunnel";
 import { getInstanceConnection, getDatabaseConnection } from "./lib/database";
 import { logger } from "./lib/logger";
+import crypto from 'crypto';
 
 const { Pool, Client } = pg;
 
@@ -3072,24 +3073,32 @@ export function registerRoutes(app: Express): Server {
         where: eq(queryMonitoringConfigs.databaseId, databaseId)
       });
       
+      // If config doesn't exist, create a default one
+      let configId = config?.id;
       if (!config) {
         console.log(`No monitoring config found for database ${databaseId}, creating default`);
-        await db.insert(queryMonitoringConfigs).values({
+        const result = await db.insert(queryMonitoringConfigs).values({
           databaseId,
           isActive: true,
           intervalMinutes: 15,
           userId: req.user.id,
           createdAt: new Date(),
           updatedAt: new Date()
-        });
+        }).returning();
+        configId = result[0].id;
       } else if (!config.isActive) {
         return res.status(400).json({ error: 'Monitoring is not active for this database' });
+      } else {
+        configId = config.id;
       }
       
-      // For this test endpoint, just update the lastRunAt time
+      // Update last run time
       await db.update(queryMonitoringConfigs)
         .set({ lastRunAt: new Date() })
-        .where(eq(queryMonitoringConfigs.databaseId, databaseId));
+        .where(eq(queryMonitoringConfigs.id, configId));
+      
+      // Start monitoring process
+      setTimeout(() => monitorQueriesProcess(databaseId, configId), 0);
       
       return res.json({ success: true, message: "Query monitoring started" });
     } catch (error) {
@@ -3100,6 +3109,129 @@ export function registerRoutes(app: Express): Server {
       });
     }
   });
+
+  // Define the monitoring function within the routes file
+  async function monitorQueriesProcess(databaseId: number, configId: number) {
+    try {
+      // Check if monitoring is still enabled
+      const config = await db.query.queryMonitoringConfigs.findFirst({
+        where: eq(queryMonitoringConfigs.id, configId)
+      });
+      
+      if (!config || !config.isActive) {
+        logger.info(`Query monitoring for database ${databaseId} is disabled, stopping`);
+        return;
+      }
+      
+      logger.info(`Running query monitoring for database ${databaseId}`);
+      
+      // Get database connection
+      const { connection, cleanup } = await getDatabaseConnection(databaseId);
+      
+      try {
+        await connection.connect();
+        
+        // Query pg_stat_statements for active queries
+        const result = await connection.query(`
+          SELECT 
+            query,
+            calls,
+            total_exec_time,
+            min_exec_time,
+            max_exec_time,
+            mean_exec_time
+          FROM pg_stat_statements
+          WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+            AND query NOT LIKE '%pg_stat_statements%'
+          ORDER BY total_exec_time DESC
+          LIMIT 1000;
+        `);
+        
+        // Process each query
+        for (const row of result.rows) {
+          const queryText = row.query;
+          
+          // Generate a hash of the query for comparison
+          const queryHash = crypto.createHash('md5').update(queryText).digest('hex');
+          
+          // Check if query already exists
+          const existingQuery = await db.query.discoveredQueries.findFirst({
+            where: and(
+              eq(discoveredQueries.queryHash, queryHash),
+              eq(discoveredQueries.databaseId, databaseId)
+            )
+          });
+          
+          if (existingQuery) {
+            // Update existing query statistics
+            await db.update(discoveredQueries)
+              .set({
+                lastSeenAt: new Date(),
+                callCount: row.calls,
+                totalTime: row.total_exec_time,
+                minTime: row.min_exec_time,
+                maxTime: row.max_exec_time,
+                meanTime: row.mean_exec_time,
+                updatedAt: new Date()
+              })
+              .where(eq(discoveredQueries.id, existingQuery.id));
+          } else {
+            // Insert new query
+            await db.insert(discoveredQueries).values({
+              databaseId,
+              queryText,
+              queryHash,
+              normalizedQuery: null, // We'll implement query normalization later
+              firstSeenAt: new Date(),
+              lastSeenAt: new Date(),
+              callCount: row.calls,
+              totalTime: row.total_exec_time,
+              minTime: row.min_exec_time,
+              maxTime: row.max_exec_time,
+              meanTime: row.mean_exec_time,
+              isKnown: false,
+              groupId: null,
+              createdAt: new Date(),
+              updatedAt: new Date()
+            });
+            
+            logger.info(`Discovered new query: ${queryText.substring(0, 100)}...`);
+          }
+        }
+        
+        // Update last run time
+        await db.update(queryMonitoringConfigs)
+          .set({
+            lastRunAt: new Date(),
+            updatedAt: new Date()
+          })
+          .where(eq(queryMonitoringConfigs.id, configId));
+        
+        // Schedule next run
+        setTimeout(() => monitorQueriesProcess(databaseId, configId), config.intervalMinutes * 60 * 1000);
+        
+      } finally {
+        if (cleanup) {
+          await cleanup();
+        }
+      }
+    } catch (error) {
+      logger.error(`Error monitoring queries for database ${databaseId}:`, error);
+      
+      // Try again in the configured interval
+      try {
+        const config = await db.query.queryMonitoringConfigs.findFirst({
+          where: eq(queryMonitoringConfigs.id, configId)
+        });
+        
+        if (config && config.isActive) {
+          setTimeout(() => monitorQueriesProcess(databaseId, configId), config.intervalMinutes * 60 * 1000);
+        }
+      } catch (retryError) {
+        logger.error(`Error scheduling retry for database ${databaseId}:`, retryError);
+      }
+    }
+  }
 
   // Add this endpoint near the other query monitoring endpoints
   app.get("/api/databases/:id/discovered-queries", requireAuth, async (req, res) => {

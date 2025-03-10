@@ -10,6 +10,7 @@ import express from 'express';
 import { SSHTunnel } from "./lib/ssh-tunnel";
 import { getInstanceConnection, getDatabaseConnection } from "./lib/database";
 import { logger } from "./lib/logger";
+import crypto from 'crypto';
 
 const { Pool, Client } = pg;
 
@@ -3072,24 +3073,32 @@ export function registerRoutes(app: Express): Server {
         where: eq(queryMonitoringConfigs.databaseId, databaseId)
       });
       
+      // If config doesn't exist, create a default one
+      let configId = config?.id;
       if (!config) {
         console.log(`No monitoring config found for database ${databaseId}, creating default`);
-        await db.insert(queryMonitoringConfigs).values({
+        const result = await db.insert(queryMonitoringConfigs).values({
           databaseId,
           isActive: true,
           intervalMinutes: 15,
           userId: req.user.id,
           createdAt: new Date(),
           updatedAt: new Date()
-        });
+        }).returning();
+        configId = result[0].id;
       } else if (!config.isActive) {
         return res.status(400).json({ error: 'Monitoring is not active for this database' });
+      } else {
+        configId = config.id;
       }
       
-      // For this test endpoint, just update the lastRunAt time
+      // Update last run time
       await db.update(queryMonitoringConfigs)
         .set({ lastRunAt: new Date() })
-        .where(eq(queryMonitoringConfigs.databaseId, databaseId));
+        .where(eq(queryMonitoringConfigs.id, configId));
+      
+      // Start monitoring process
+      setTimeout(() => monitorQueriesProcess(databaseId, configId), 0);
       
       return res.json({ success: true, message: "Query monitoring started" });
     } catch (error) {
@@ -3101,104 +3110,236 @@ export function registerRoutes(app: Express): Server {
     }
   });
 
+  // Define the monitoring function within the routes file
+  async function monitorQueriesProcess(databaseId: number, configId: number) {
+    try {
+      // Check if monitoring is still enabled
+      const config = await db.query.queryMonitoringConfigs.findFirst({
+        where: eq(queryMonitoringConfigs.id, configId)
+      });
+      
+      if (!config || !config.isActive) {
+        logger.info(`Query monitoring for database ${databaseId} is disabled, stopping`);
+        return;
+      }
+      
+      logger.info(`Running query monitoring for database ${databaseId}`);
+      
+      // Get database connection
+      const { connection, cleanup } = await getDatabaseConnection(databaseId);
+      
+      try {
+        await connection.connect();
+        
+        // Query pg_stat_statements for active queries
+        const result = await connection.query(`
+          SELECT 
+            query,
+            calls,
+            total_exec_time,
+            min_exec_time,
+            max_exec_time,
+            mean_exec_time
+          FROM pg_stat_statements
+          WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+            AND query NOT LIKE '%pg_stat_statements%'
+          ORDER BY total_exec_time DESC
+          LIMIT 1000;
+        `);
+        
+        // Process each query
+        for (const row of result.rows) {
+          const queryText = row.query;
+          
+          // Generate a hash of the query for comparison
+          const queryHash = crypto.createHash('md5').update(queryText).digest('hex');
+          
+          // Check if query already exists
+          const existingQuery = await db.query.discoveredQueries.findFirst({
+            where: and(
+              eq(discoveredQueries.queryHash, queryHash),
+              eq(discoveredQueries.databaseId, databaseId)
+            )
+          });
+          
+          if (existingQuery) {
+            // Update existing query statistics
+            await db.update(discoveredQueries)
+              .set({
+                lastSeenAt: new Date(),
+                callCount: row.calls,
+                totalTime: row.total_exec_time,
+                minTime: row.min_exec_time,
+                maxTime: row.max_exec_time,
+                meanTime: row.mean_exec_time,
+                updatedAt: new Date()
+              })
+              .where(eq(discoveredQueries.id, existingQuery.id));
+          } else {
+            // Insert new query
+            await db.insert(discoveredQueries).values({
+              databaseId,
+              queryText,
+              queryHash,
+              normalizedQuery: null, // We'll implement query normalization later
+              firstSeenAt: new Date(),
+              lastSeenAt: new Date(),
+              callCount: row.calls,
+              totalTime: row.total_exec_time,
+              minTime: row.min_exec_time,
+              maxTime: row.max_exec_time,
+              meanTime: row.mean_exec_time,
+              isKnown: false,
+              groupId: null,
+              createdAt: new Date(),
+              updatedAt: new Date()
+            });
+            
+            logger.info(`Discovered new query: ${queryText.substring(0, 100)}...`);
+          }
+        }
+        
+        // Update last run time
+        await db.update(queryMonitoringConfigs)
+          .set({
+            lastRunAt: new Date(),
+            updatedAt: new Date()
+          })
+          .where(eq(queryMonitoringConfigs.id, configId));
+        
+        // Schedule next run
+        setTimeout(() => monitorQueriesProcess(databaseId, configId), config.intervalMinutes * 60 * 1000);
+        
+      } finally {
+        if (cleanup) {
+          await cleanup();
+        }
+      }
+    } catch (error) {
+      logger.error(`Error monitoring queries for database ${databaseId}:`, error);
+      
+      // Try again in the configured interval
+      try {
+        const config = await db.query.queryMonitoringConfigs.findFirst({
+          where: eq(queryMonitoringConfigs.id, configId)
+        });
+        
+        if (config && config.isActive) {
+          setTimeout(() => monitorQueriesProcess(databaseId, configId), config.intervalMinutes * 60 * 1000);
+        }
+      } catch (retryError) {
+        logger.error(`Error scheduling retry for database ${databaseId}:`, retryError);
+      }
+    }
+  }
+
   // Add this endpoint near the other query monitoring endpoints
   app.get("/api/databases/:id/discovered-queries", requireAuth, async (req, res) => {
     try {
-      const databaseId = parseInt(req.params.id);
-      const showKnown = req.query.showKnown === 'true';
-      const groupId = req.query.groupId as string;
-      const startDate = req.query.startDate as string;
-      const endDate = req.query.endDate as string;
-      const search = req.query.search as string;
-      
-      console.log(`Fetching discovered queries for database ${databaseId}:`, { 
-        showKnown, 
-        groupId,
-        startDate,
-        endDate,
-        search
-      });
-      
-      // Build the where conditions
-      let whereConditions = eq(discoveredQueries.databaseId, databaseId);
-      
-      // Handle known/unknown filter
-      if (!showKnown) {
-        whereConditions = and(
-          whereConditions,
-          eq(discoveredQueries.isKnown, false)
-        );
-      }
-      
-      // Handle group filter
-      if (groupId === 'ungrouped') {
-        whereConditions = and(
-          whereConditions,
-          isNull(discoveredQueries.groupId)
-        );
-      } else if (groupId && groupId !== 'all_queries') {
-        whereConditions = and(
-          whereConditions,
-          eq(discoveredQueries.groupId, parseInt(groupId))
-        );
-      }
-      
-      // Handle date filters
-      if (startDate) {
-        try {
-          const parsedStartDate = new Date(startDate);
-          if (!isNaN(parsedStartDate.getTime())) {
-            whereConditions = and(
-              whereConditions,
-              gte(discoveredQueries.lastSeenAt, parsedStartDate)
-            );
-          }
-        } catch (error) {
-          console.error(`Error parsing start date: ${startDate}`, error);
-        }
-      }
-      
-      if (endDate) {
-        try {
-          const parsedEndDate = new Date(endDate);
-          if (!isNaN(parsedEndDate.getTime())) {
-            whereConditions = and(
-              whereConditions,
-              lte(discoveredQueries.lastSeenAt, parsedEndDate)
-            );
-          }
-        } catch (error) {
-          console.error(`Error parsing end date: ${endDate}`, error);
-        }
-      }
-      
-      // Handle search
-      if (search && search.trim()) {
-        try {
-          const searchPattern = `%${search.trim().replace(/%/g, '\\%').replace(/_/g, '\\_')}%`;
-          whereConditions = and(
-            whereConditions,
-            sql`${discoveredQueries.queryText}::text ILIKE ${searchPattern}`
-          );
-          console.log(`Applied search filter with pattern: ${searchPattern}`);
-        } catch (error) {
-          console.error(`Error applying search filter: ${search}`, error);
-        }
-      }
-      
-      // Query the database
-      const queries = await db.select()
-        .from(discoveredQueries)
-        .where(whereConditions)
-        .orderBy(desc(discoveredQueries.lastSeenAt))
-        .limit(100);
-      
-      console.log(`Found ${queries.length} queries matching filters`);
-      
-      // Set cache control headers
+      // Add no-cache headers to prevent caching
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
+      
+      const databaseId = parseInt(req.params.id);
+      console.log(`Fetching discovered queries for database ${databaseId} with params:`, req.query);
+      
+      // Parse query parameters
+      const startDate = req.query.startDate ? new Date(req.query.startDate as string) : undefined;
+      const endDate = req.query.endDate ? new Date(req.query.endDate as string) : undefined;
+      const search = req.query.search as string | undefined;
+      const groupIdParam = req.query.groupId as string | undefined;
+      const showKnown = req.query.showKnown === 'true';
+      
+      // Log the parsed parameters
+      console.log('Parsed parameters:', {
+        startDate: startDate?.toISOString(),
+        endDate: endDate?.toISOString(),
+        search,
+        groupIdParam,
+        showKnown
+      });
+      
+      // Build query conditions
+      let conditions = [eq(discoveredQueries.databaseId, databaseId)];
+      
+      // Add show known filter - debug what's actually in the database
+      const knownQueryCount = await db.select({count: sql`count(*)`})
+        .from(discoveredQueries)
+        .where(and(
+          eq(discoveredQueries.databaseId, databaseId),
+          eq(discoveredQueries.isKnown, true)
+        ));
+      
+      const unknownQueryCount = await db.select({count: sql`count(*)`})
+        .from(discoveredQueries)
+        .where(and(
+          eq(discoveredQueries.databaseId, databaseId),
+          eq(discoveredQueries.isKnown, false)
+        ));
+      
+      console.log(`Database contains ${knownQueryCount[0]?.count || 0} known queries and ${unknownQueryCount[0]?.count || 0} unknown queries`);
+      
+      // Add show known filter - make sure this is working correctly
+      if (!showKnown) {
+        conditions.push(eq(discoveredQueries.isKnown, false));
+        console.log('Adding filter: only show unknown queries');
+      } else {
+        console.log('Showing both known and unknown queries');
+      }
+      
+      // Rest of the code remains the same
+      if (startDate) {
+        conditions.push(gte(discoveredQueries.lastSeenAt, startDate));
+      }
+      
+      if (endDate) {
+        conditions.push(lte(discoveredQueries.lastSeenAt, endDate));
+      }
+      
+      if (search) {
+        conditions.push(sql`${discoveredQueries.queryText} ILIKE ${`%${search}%`}`);
+      }
+      
+      // Handle group filtering
+      if (groupIdParam === 'null') {
+        conditions.push(isNull(discoveredQueries.groupId));
+      } else if (groupIdParam) {
+        conditions.push(eq(discoveredQueries.groupId, parseInt(groupIdParam)));
+      }
+      
+      // Log the SQL query in a readable form (if possible)
+      console.log('Query conditions:', conditions);
+      
+      // Execute the query
+      const queries = await db.query.discoveredQueries.findMany({
+        where: and(...conditions),
+        orderBy: [desc(discoveredQueries.lastSeenAt)],
+        limit: 1000
+      });
+      
+      console.log(`Found ${queries.length} queries matching the criteria`);
+      
+      // Additional debugging
+      if (queries.length === 0 && !showKnown) {
+        console.log('No queries found with isKnown=false. Checking query validity...');
+        
+        // Check if we have any queries without time filters
+        const checkQueries = await db.query.discoveredQueries.findMany({
+          where: and(
+            eq(discoveredQueries.databaseId, databaseId),
+            eq(discoveredQueries.isKnown, false)
+          ),
+          limit: 5
+        });
+        
+        if (checkQueries.length > 0) {
+          console.log(`Found ${checkQueries.length} queries when only filtering by isKnown=false. Something is wrong with other filters.`);
+          console.log('Sample query:', checkQueries[0]);
+        } else {
+          console.log('No queries found with isKnown=false at all. Check database data.');
+        }
+      }
       
       return res.json(queries);
     } catch (error) {

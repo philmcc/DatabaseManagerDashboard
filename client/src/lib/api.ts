@@ -30,10 +30,56 @@ export const apiRequest = async (endpoint: string, options: RequestInit = {}) =>
 };
 
 export const api = {
-  databases: {
-    test: (id) => fetch(`/api/databases/${id}/test`, { method: 'POST' }),
-    metrics: (id) => fetch(`/api/databases/${id}/metrics`),
-    // ...
+  auth: {
+    login: (credentials) => apiRequest('/auth/login', { 
+      method: 'POST', 
+      body: JSON.stringify(credentials) 
+    }),
+    logout: () => apiRequest('/auth/logout', { method: 'POST' }),
+    register: (userData) => apiRequest('/auth/register', { 
+      method: 'POST', 
+      body: JSON.stringify(userData) 
+    }),
   },
-  // Other API endpoints
-} 
+  users: {
+    me: () => apiRequest('/users/me'),
+    list: () => apiRequest('/users'),
+    updateRole: (id, role) => apiRequest(`/users/${id}/role`, {
+      method: 'PATCH',
+      body: JSON.stringify({ role })
+    }),
+    approve: (id) => apiRequest(`/users/${id}/approve`, { method: 'POST' }),
+  },
+  databases: {
+    list: () => apiRequest('/databases'),
+    get: (id) => apiRequest(`/databases/${id}`),
+    test: (id) => apiRequest(`/databases/${id}/test`, { method: 'POST' }),
+    metrics: (id) => apiRequest(`/databases/${id}/metrics`),
+    create: (data) => apiRequest('/databases', { 
+      method: 'POST', 
+      body: JSON.stringify(data) 
+    }),
+    update: (id, data) => apiRequest(`/databases/${id}`, { 
+      method: 'PUT', 
+      body: JSON.stringify(data) 
+    }),
+    delete: (id) => apiRequest(`/databases/${id}`, { method: 'DELETE' }),
+    queryMonitoring: {
+      getConfig: (id) => apiRequest(`/databases/${id}/query-monitoring/config`),
+      updateConfig: (id, config) => apiRequest(`/databases/${id}/query-monitoring/config`, {
+        method: 'POST',
+        body: JSON.stringify(config)
+      }),
+      start: (id) => apiRequest(`/databases/${id}/query-monitoring/start`, { method: 'POST' }),
+      getQueries: (id, params = {}) => {
+        const queryString = new URLSearchParams(params).toString();
+        return apiRequest(`/databases/${id}/discovered-queries?${queryString}`);
+      },
+      updateQuery: (id, queryData) => apiRequest(`/databases/${id}/discovered-queries`, {
+        method: 'PATCH',
+        body: JSON.stringify(queryData)
+      }),
+    },
+  },
+  // Add other API sections (clusters, instances, etc.)
+}; 

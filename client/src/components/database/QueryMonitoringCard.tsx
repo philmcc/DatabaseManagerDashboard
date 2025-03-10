@@ -181,9 +181,11 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
         params.append('groupId', selectedGroupId === UNGROUPED ? 'null' : selectedGroupId);
       }
       
-      // Add show known parameter - always include this
+      // Add show known parameter
       params.append('showKnown', showKnown.toString());
-      console.log(`Setting showKnown=${showKnown}`);
+      
+      // Add cache-busting timestamp to prevent 304 responses
+      params.append('_t', Date.now().toString());
       
       const queryString = params.toString();
       if (queryString) {
@@ -192,7 +194,10 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
       
       console.log('Fetching from URL:', apiUrl);
       
-      const response = await fetch(apiUrl);
+      // Set cache: 'no-store' to prevent caching
+      const response = await fetch(apiUrl, {
+        cache: 'no-store'
+      });
       
       // Log response status
       console.log('Query fetch response status:', response.status);
@@ -212,7 +217,7 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
     }
   };
 
-  // Update the useQuery hook to depend on the new filter parameters
+  // Update the useQuery hook to remove the random value from the query key
   const { data: queries = [], isLoading: isLoadingQueries, refetch: refetchQueries } = useQuery({
     queryKey: [
       `database-${databaseId}-discovered-queries`, 
@@ -224,9 +229,10 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
       searchQuery
     ],
     queryFn: fetchQueries,
-    // Add these options to ensure it refetches properly
-    staleTime: 30000, // Consider data stale after 30 seconds
-    refetchOnWindowFocus: false,
+    // Keep these settings to ensure fresh data each time filters change
+    staleTime: 0,
+    cacheTime: 1000 * 60, // Cache for 1 minute instead of 0
+    refetchOnWindowFocus: true,
     refetchOnMount: true
   });
 
@@ -554,6 +560,13 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
     };
   }, []);
 
+  // Near the top of the return statement, add some debug output
+  console.log('Render state:', { 
+    isLoadingQueries, 
+    queriesLength: queries.length, 
+    showKnown 
+  });
+
   return (
     <Card className="mt-6">
       <CardHeader>
@@ -840,17 +853,20 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
                 )}
                 
                 {isLoadingQueries ? (
-                  <div className="flex justify-center p-4">
-                    <Loader2 className="h-6 w-6 animate-spin" />
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="mr-2 h-8 w-8 animate-spin" />
+                    <span>Loading queries...</span>
                   </div>
                 ) : queries.length === 0 ? (
-                  <div className="text-center p-6 border rounded-md">
-                    <p>No queries found.</p>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      {config?.isActive 
-                        ? "Start monitoring to discover queries or adjust your filters."
-                        : "Enable monitoring in the configuration tab, then start monitoring to discover queries."}
-                    </p>
+                  <div className="text-center py-8">
+                    <div className="text-gray-500">No queries found with the current filters</div>
+                    {!showKnown && (
+                      <div className="mt-2">
+                        <Button variant="outline" onClick={() => setShowKnown(true)}>
+                          Show Known Queries
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-3">

@@ -3236,9 +3236,14 @@ export function registerRoutes(app: Express): Server {
   // Add this endpoint near the other query monitoring endpoints
   app.get("/api/databases/:id/discovered-queries", requireAuth, async (req, res) => {
     try {
+      // Add no-cache headers to prevent caching
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      
       const databaseId = parseInt(req.params.id);
       console.log(`Fetching discovered queries for database ${databaseId} with params:`, req.query);
-
+      
       // Parse query parameters
       const startDate = req.query.startDate ? new Date(req.query.startDate as string) : undefined;
       const endDate = req.query.endDate ? new Date(req.query.endDate as string) : undefined;

@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { setupAuth } from "./auth";
 import { db } from "@db";
-import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics, clusters, instances, healthCheckQueries, healthCheckExecutions, healthCheckResults, healthCheckReports, queryMonitoringConfigs, discoveredQueries, queryGroups } from "@db/schema";
+import { users, databaseConnections, tags, databaseTags, databaseOperationLogs, databaseMetrics, clusters, instances, healthCheckQueries, healthCheckExecutions, healthCheckResults, healthCheckReports, queryMonitoringConfigs, discoveredQueries, queryGroups, normalizedQueries, collectedQueries } from "@db/schema";
 import { eq, and, ne, sql, desc, asc, isNull, gte, lte } from "drizzle-orm";
 import pg from 'pg';
 import { z } from "zod";
@@ -11,6 +11,7 @@ import { SSHTunnel } from "./lib/ssh-tunnel";
 import { getInstanceConnection, getDatabaseConnection } from "./lib/database";
 import { logger } from "./lib/logger";
 import crypto from 'crypto';
+import { normalizeAndHashQuery } from './utils/query-normalizer.js';
 
 const { Pool, Client } = pg;
 
@@ -3147,63 +3148,105 @@ export function registerRoutes(app: Express): Server {
           LIMIT 1000;
         `);
         
+        const now = new Date();
+        let newQueries = 0;
+        let updatedQueries = 0;
+        
         // Process each query
         for (const row of result.rows) {
           const queryText = row.query;
           
-          // Generate a hash of the query for comparison
+          // Use the query normalizer utility to get normalized query and hash
+          const { normalizedQuery: normalizedText, normalizedHash } = normalizeAndHashQuery(queryText);
           const queryHash = crypto.createHash('md5').update(queryText).digest('hex');
           
-          // Check if query already exists
-          const existingQuery = await db.query.discoveredQueries.findFirst({
+          // Check if normalized query already exists by normalized hash
+          const existingNormalizedQuery = await db.query.normalizedQueries.findFirst({
             where: and(
-              eq(discoveredQueries.queryHash, queryHash),
-              eq(discoveredQueries.databaseId, databaseId)
+              eq(normalizedQueries.normalizedHash, normalizedHash),
+              eq(normalizedQueries.databaseId, databaseId)
             )
           });
           
-          if (existingQuery) {
-            // Update existing query statistics
-            await db.update(discoveredQueries)
+          let normalizedQueryId: number;
+          
+          if (existingNormalizedQuery) {
+            // Update the last_seen_at timestamp for the normalized query
+            await db.update(normalizedQueries)
               .set({
-                lastSeenAt: new Date(),
-                callCount: row.calls,
+                lastSeenAt: now,
+                updatedAt: now
+              })
+              .where(eq(normalizedQueries.id, existingNormalizedQuery.id));
+            
+            normalizedQueryId = existingNormalizedQuery.id;
+          } else {
+            // Insert new normalized query
+            const insertedNormalizedQuery = await db.insert(normalizedQueries).values({
+              databaseId,
+              normalizedText,
+              normalizedHash,
+              firstSeenAt: now,
+              lastSeenAt: now,
+              isKnown: false,
+              groupId: null,
+              createdAt: now,
+              updatedAt: now
+            }).returning();
+            
+            normalizedQueryId = insertedNormalizedQuery[0].id;
+            newQueries++;
+            
+            logger.info(`Discovered new normalized query: ${normalizedText.substring(0, 80)}...`);
+          }
+          
+          // Check if we already have a collected query instance for this exact query
+          const existingCollectedQuery = await db.query.collectedQueries.findFirst({
+            where: and(
+              eq(collectedQueries.normalizedQueryId, normalizedQueryId),
+              eq(collectedQueries.queryHash, queryHash)
+            )
+          });
+          
+          if (existingCollectedQuery) {
+            // Update the collected query statistics
+            await db.update(collectedQueries)
+              .set({
+                calls: row.calls,
                 totalTime: row.total_exec_time,
                 minTime: row.min_exec_time,
                 maxTime: row.max_exec_time,
                 meanTime: row.mean_exec_time,
-                updatedAt: new Date()
+                lastUpdatedAt: now
               })
-              .where(eq(discoveredQueries.id, existingQuery.id));
+              .where(eq(collectedQueries.id, existingCollectedQuery.id));
+            
+            updatedQueries++;
           } else {
-            // Insert new query
-            await db.insert(discoveredQueries).values({
+            // Insert new collected query
+            await db.insert(collectedQueries).values({
+              normalizedQueryId,
               databaseId,
               queryText,
               queryHash,
-              normalizedQuery: null, // We'll implement query normalization later
-              firstSeenAt: new Date(),
-              lastSeenAt: new Date(),
-              callCount: row.calls,
+              calls: row.calls,
               totalTime: row.total_exec_time,
               minTime: row.min_exec_time,
               maxTime: row.max_exec_time,
               meanTime: row.mean_exec_time,
-              isKnown: false,
-              groupId: null,
-              createdAt: new Date(),
-              updatedAt: new Date()
+              collectedAt: now,
+              lastUpdatedAt: now
             });
-            
-            logger.info(`Discovered new query: ${queryText.substring(0, 100)}...`);
           }
         }
+        
+        logger.info(`Monitoring completed: ${result.rows.length} queries processed, ${newQueries} new normalized queries, ${updatedQueries} updated queries`);
         
         // Update last run time
         await db.update(queryMonitoringConfigs)
           .set({
-            lastRunAt: new Date(),
-            updatedAt: new Date()
+            lastRunAt: now,
+            updatedAt: now
           })
           .where(eq(queryMonitoringConfigs.id, configId));
         
@@ -3260,88 +3303,138 @@ export function registerRoutes(app: Express): Server {
         showKnown
       });
       
-      // Build query conditions
-      let conditions = [eq(discoveredQueries.databaseId, databaseId)];
+      // Now use a dynamic SQL query with the new schema
+      let queryStr = `
+        SELECT 
+          nq.id,
+          nq.database_id as "databaseId",
+          nq.normalized_text as "normalizedText",
+          nq.normalized_hash as "normalizedHash",
+          nq.is_known as "isKnown",
+          nq.group_id as "groupId",
+          nq.first_seen_at as "firstSeenAt",
+          nq.last_seen_at as "lastSeenAt",
+          COUNT(cq.id) as "instanceCount",
+          SUM(cq.calls) as "callCount",
+          SUM(cq.total_time) as "totalTime",
+          MIN(cq.min_time) as "minTime",
+          MAX(cq.max_time) as "maxTime",
+          CASE WHEN SUM(cq.calls) > 0 
+            THEN SUM(cq.total_time) / SUM(cq.calls) 
+            ELSE 0 
+          END as "meanTime",
+          MAX(cq.last_updated_at) as "lastUpdatedAt",
+          (
+            SELECT cq2.query_text
+            FROM collected_queries cq2
+            WHERE cq2.normalized_query_id = nq.id
+            ORDER BY cq2.last_updated_at DESC
+            LIMIT 1
+          ) as "queryText"
+        FROM 
+          normalized_queries nq
+        LEFT JOIN 
+          collected_queries cq ON nq.id = cq.normalized_query_id
+        WHERE 
+          nq.database_id = $1
+      `;
       
-      // Add show known filter - debug what's actually in the database
-      const knownQueryCount = await db.select({count: sql`count(*)`})
-        .from(discoveredQueries)
-        .where(and(
-          eq(discoveredQueries.databaseId, databaseId),
-          eq(discoveredQueries.isKnown, true)
-        ));
+      // Build the dynamic WHERE clause
+      const params: any[] = [databaseId];
       
-      const unknownQueryCount = await db.select({count: sql`count(*)`})
-        .from(discoveredQueries)
-        .where(and(
-          eq(discoveredQueries.databaseId, databaseId),
-          eq(discoveredQueries.isKnown, false)
-        ));
-      
-      console.log(`Database contains ${knownQueryCount[0]?.count || 0} known queries and ${unknownQueryCount[0]?.count || 0} unknown queries`);
-      
-      // Add show known filter - make sure this is working correctly
       if (!showKnown) {
-        conditions.push(eq(discoveredQueries.isKnown, false));
-        console.log('Adding filter: only show unknown queries');
-      } else {
-        console.log('Showing both known and unknown queries');
+        queryStr += ` AND nq.is_known = false`;
       }
       
-      // Rest of the code remains the same
+      // Add group filtering
+      if (groupIdParam === 'ungrouped') {
+        queryStr += ` AND nq.group_id IS NULL`;
+      } else if (groupIdParam && groupIdParam !== 'all_queries') {
+        queryStr += ` AND nq.group_id = $${params.length + 1}`;
+        params.push(parseInt(groupIdParam));
+      }
+      
+      // Add date range filtering
       if (startDate) {
-        conditions.push(gte(discoveredQueries.lastSeenAt, startDate));
+        queryStr += ` AND nq.last_seen_at >= $${params.length + 1}`;
+        params.push(startDate);
       }
       
       if (endDate) {
-        conditions.push(lte(discoveredQueries.lastSeenAt, endDate));
+        queryStr += ` AND nq.last_seen_at <= $${params.length + 1}`;
+        params.push(endDate);
       }
       
-      if (search) {
-        conditions.push(sql`${discoveredQueries.queryText} ILIKE ${`%${search}%`}`);
+      // Add search filter
+      if (search && search.trim()) {
+        // We search in the most recent query text for this normalized query
+        queryStr += ` AND EXISTS (
+          SELECT 1 FROM collected_queries cq_search 
+          WHERE cq_search.normalized_query_id = nq.id 
+          AND cq_search.query_text ILIKE $${params.length + 1}
+        )`;
+        params.push(`%${search.trim()}%`);
       }
       
-      // Handle group filtering
-      if (groupIdParam === 'null') {
-        conditions.push(isNull(discoveredQueries.groupId));
-      } else if (groupIdParam) {
-        conditions.push(eq(discoveredQueries.groupId, parseInt(groupIdParam)));
-      }
-      
-      // Log the SQL query in a readable form (if possible)
-      console.log('Query conditions:', conditions);
+      // Add GROUP BY, ORDER BY, and LIMIT
+      queryStr += `
+        GROUP BY 
+          nq.id, nq.database_id, nq.normalized_text, nq.normalized_hash, 
+          nq.is_known, nq.group_id, nq.first_seen_at, nq.last_seen_at
+        ORDER BY 
+          nq.last_seen_at DESC
+        LIMIT 100
+      `;
       
       // Execute the query
-      const queries = await db.query.discoveredQueries.findMany({
-        where: and(...conditions),
-        orderBy: [desc(discoveredQueries.lastSeenAt)],
-        limit: 1000
-      });
-      
-      console.log(`Found ${queries.length} queries matching the criteria`);
-      
-      // Additional debugging
-      if (queries.length === 0 && !showKnown) {
-        console.log('No queries found with isKnown=false. Checking query validity...');
-        
-        // Check if we have any queries without time filters
-        const checkQueries = await db.query.discoveredQueries.findMany({
-          where: and(
-            eq(discoveredQueries.databaseId, databaseId),
-            eq(discoveredQueries.isKnown, false)
-          ),
-          limit: 5
+      try {
+        // Use the pg Pool directly since db.execute has issues
+        const pool = new pg.Pool({
+          connectionString: process.env.DATABASE_URL,
         });
         
-        if (checkQueries.length > 0) {
-          console.log(`Found ${checkQueries.length} queries when only filtering by isKnown=false. Something is wrong with other filters.`);
-          console.log('Sample query:', checkQueries[0]);
-        } else {
-          console.log('No queries found with isKnown=false at all. Check database data.');
+        try {
+          const result = await pool.query(queryStr, params);
+          const queries = result.rows;
+          
+          console.log(`Found ${queries.length} queries matching the criteria`);
+          
+          // Additional debugging
+          if (queries.length === 0 && !showKnown) {
+            console.log('No queries found with isKnown=false. Checking query validity...');
+            
+            // Check if we have any queries without time filters
+            const checkResult = await pool.query(
+              "SELECT COUNT(*) as count FROM normalized_queries WHERE database_id = $1 AND is_known = false",
+              [databaseId]
+            );
+            const count = parseInt(checkResult.rows[0].count);
+            
+            if (count > 0) {
+              console.log(`Found ${count} queries when only filtering by isKnown=false. Something may be wrong with other filters.`);
+              
+              // Get a sample query
+              const sampleResult = await pool.query(
+                "SELECT * FROM normalized_queries WHERE database_id = $1 AND is_known = false LIMIT 1",
+                [databaseId]
+              );
+              console.log('Sample query:', sampleResult.rows[0]);
+            } else {
+              console.log('No queries found with isKnown=false at all. Check database data.');
+            }
+          }
+          
+          return res.json(queries);
+        } finally {
+          await pool.end();
         }
+      } catch (error) {
+        console.error('Error fetching discovered queries:', error);
+        return res.status(500).json({ 
+          error: 'Failed to fetch discovered queries',
+          message: error instanceof Error ? error.message : 'Unknown error'
+        });
       }
-      
-      return res.json(queries);
     } catch (error) {
       console.error('Error fetching discovered queries:', error);
       return res.status(500).json({ 
@@ -3352,47 +3445,53 @@ export function registerRoutes(app: Express): Server {
   });
 
   // Add endpoint for updating discovered queries
-  app.patch("/api/databases/:id/discovered-queries", requireAuth, async (req, res) => {
+  app.patch("/api/databases/:id/discovered-queries/:queryId", requireAuth, async (req, res) => {
     try {
-      const databaseId = parseInt(req.params.id);
-      const { queryId, isKnown, groupId } = req.body;
+      const { id, queryId } = req.params;
+      const { isKnown, groupId } = req.body;
       
-      console.log(`Updating discovered query for database ${databaseId}:`, { 
-        queryId,
-        isKnown,
-        groupId
+      console.log(`Updating discovered query ${queryId} for database ${id}, isKnown: ${isKnown}, groupId: ${groupId ?? 'null'}`);
+      
+      // Use direct SQL query for updating
+      const pool = new pg.Pool({
+        connectionString: process.env.DATABASE_URL,
       });
       
-      // Check that the query exists and belongs to this database
-      const query = await db.query.discoveredQueries.findFirst({
-        where: and(
-          eq(discoveredQueries.id, queryId),
-          eq(discoveredQueries.databaseId, databaseId)
-        )
-      });
-      
-      if (!query) {
-        return res.status(404).json({ error: 'Query not found' });
+      try {
+        // Prepare update fields
+        const updateFields = [];
+        const params = [parseInt(queryId), parseInt(id)];
+        let paramIndex = 3;
+        
+        if (isKnown !== undefined) {
+          updateFields.push(`is_known = $${paramIndex++}`);
+          params.push(isKnown);
+        }
+        
+        if (groupId !== undefined) {
+          updateFields.push(`group_id = $${paramIndex++}`);
+          params.push(groupId === null ? null : groupId);
+        }
+        
+        // Add updated_at field
+        updateFields.push(`updated_at = $${paramIndex++}`);
+        params.push(new Date());
+        
+        // Build and execute query if we have fields to update
+        if (updateFields.length > 0) {
+          const updateQuery = `
+            UPDATE normalized_queries
+            SET ${updateFields.join(', ')}
+            WHERE id = $1 AND database_id = $2
+          `;
+          
+          await pool.query(updateQuery, params);
+        }
+        
+        return res.json({ success: true });
+      } finally {
+        await pool.end();
       }
-      
-      // Update the query
-      const updateData: Partial<typeof discoveredQueries.$inferSelect> = {
-        updatedAt: new Date()
-      };
-      
-      if (isKnown !== undefined) {
-        updateData.isKnown = isKnown;
-      }
-      
-      if (groupId !== undefined) {
-        updateData.groupId = groupId;
-      }
-      
-      await db.update(discoveredQueries)
-        .set(updateData)
-        .where(eq(discoveredQueries.id, queryId));
-      
-      return res.json({ success: true });
     } catch (error) {
       console.error('Error updating discovered query:', error);
       return res.status(500).json({ 

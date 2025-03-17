@@ -1,11 +1,12 @@
 import express from 'express';
 import { db } from '@/db';
-import { queryMonitoringConfigs, queryGroups, discoveredQueries } from '@/db/schema';
+import { queryMonitoringConfigs, queryGroups, normalizedQueries, collectedQueries } from '@/db/schema';
 import { eq, and, isNull, desc, gte, lte, sql } from 'drizzle-orm';
 import { getDatabaseConnection } from '@/lib/database';
 import crypto from 'crypto';
 import queryMonitoringRouter from './query-monitoring';
 import { requireAuth } from '@/lib/auth';
+import { normalizeAndHashQuery } from '../../utils/query-normalizer.js';
 
 const router = express.Router();
 
@@ -78,39 +79,47 @@ router.post('/:id/query-monitoring/start', async (req, res) => {
   try {
     const databaseId = parseInt(req.params.id);
     
-    // Log the action
-    console.log(`Starting query monitoring for database ${databaseId}`);
-    
-    // Get the monitoring config
-    const config = await db.query.queryMonitoringConfigs.findFirst({
-      where: eq(queryMonitoringConfigs.databaseId, databaseId)
+    // Check if the database exists and user has access
+    const database = await db.query.databaseConnections.findFirst({
+      where: eq(databaseConnections.id, databaseId)
     });
-    
-    // If config doesn't exist, create a default one
-    if (!config) {
-      console.log(`No monitoring config found for database ${databaseId}, creating default`);
-      
-      const result = await db.insert(queryMonitoringConfigs).values({
-        databaseId,
-        isActive: true,
-        intervalMinutes: 15,
-        userId: req.user?.id || 1, // Default to user 1 if auth not implemented
-        createdAt: new Date(),
-        updatedAt: new Date()
-      }).returning();
-      
-      console.log('Created default monitoring config:', result);
+
+    if (!database) {
+      return res.status(404).json({ error: 'Database not found' });
     }
-    
-    if (!config.isActive) {
-      return res.status(400).json({ error: 'Monitoring is not active for this database' });
+
+    // Check if there's already an active monitoring config
+    const existingConfig = await db.query.queryMonitoringConfigs.findFirst({
+      where: and(
+        eq(queryMonitoringConfigs.databaseId, databaseId),
+        eq(queryMonitoringConfigs.isActive, true)
+      )
+    });
+
+    let configId;
+    if (existingConfig) {
+      configId = existingConfig.id;
+      await db.update(queryMonitoringConfigs)
+        .set({
+          updatedAt: new Date()
+        })
+        .where(eq(queryMonitoringConfigs.id, configId));
+    } else {
+      // Create a new monitoring config
+      const [newConfig] = await db.insert(queryMonitoringConfigs)
+        .values({
+          databaseId,
+          isActive: true,
+          intervalMinutes: 15,
+          userId: 1, // Default system user for now
+          createdAt: new Date(),
+          updatedAt: new Date()
+        })
+        .returning();
+
+      configId = newConfig.id;
     }
-    
-    // Update last run time
-    await db.update(queryMonitoringConfigs)
-      .set({ lastRunAt: new Date() })
-      .where(eq(queryMonitoringConfigs.id, config.id));
-    
+
     // Start the monitoring process
     // This would normally be a background job, but for simplicity we'll do it synchronously
     try {
@@ -148,53 +157,88 @@ router.post('/:id/query-monitoring/start', async (req, res) => {
       
       // Process and store queries
       let processedCount = 0;
+      const now = new Date();
       
       for (const row of queriesResult.rows) {
         const queryText = row.query;
         
-        // Generate a hash for the query
-        const queryHash = crypto
-          .createHash('md5')
-          .update(queryText)
-          .digest('hex');
+        // Use the query normalization utility
+        const { normalizedQuery: normalizedText, normalizedHash } = normalizeAndHashQuery(queryText);
+        const queryHash = crypto.createHash('md5').update(queryText).digest('hex');
         
-        // Check if query exists
-        const existingQuery = await db.query.discoveredQueries.findFirst({
-          where: eq(discoveredQueries.queryHash, queryHash)
+        // Check if this normalized query already exists
+        let normalizedQueryId;
+        const existingNormalized = await db.query.normalizedQueries.findFirst({
+          where: and(
+            eq(normalizedQueries.normalizedHash, normalizedHash),
+            eq(normalizedQueries.databaseId, databaseId)
+          )
         });
         
-        if (existingQuery) {
-          // Update existing query
-          await db.update(discoveredQueries)
+        if (existingNormalized) {
+          // Update the last seen timestamp
+          normalizedQueryId = existingNormalized.id;
+          await db.update(normalizedQueries)
             .set({
-              lastSeenAt: new Date(),
-              callCount: row.calls,
+              lastSeenAt: now,
+              updatedAt: now
+            })
+            .where(eq(normalizedQueries.id, normalizedQueryId));
+        } else {
+          // Create a new normalized query record
+          const [newNormalized] = await db.insert(normalizedQueries)
+            .values({
+              databaseId,
+              normalizedText,
+              normalizedHash,
+              firstSeenAt: now,
+              lastSeenAt: now,
+              isKnown: false,
+              groupId: null,
+              createdAt: now,
+              updatedAt: now
+            })
+            .returning();
+          
+          normalizedQueryId = newNormalized.id;
+        }
+        
+        // Check if this exact query was already collected (by query hash)
+        const existingCollected = await db.query.collectedQueries.findFirst({
+          where: and(
+            eq(collectedQueries.queryHash, queryHash),
+            eq(collectedQueries.databaseId, databaseId)
+          )
+        });
+        
+        if (existingCollected) {
+          // Update the existing collected query with new stats
+          await db.update(collectedQueries)
+            .set({
+              calls: row.calls,
               totalTime: row.total_exec_time,
               minTime: row.min_exec_time,
               maxTime: row.max_exec_time,
               meanTime: row.mean_exec_time,
-              updatedAt: new Date()
+              lastUpdatedAt: now
             })
-            .where(eq(discoveredQueries.id, existingQuery.id));
+            .where(eq(collectedQueries.id, existingCollected.id));
         } else {
-          // Create new query
-          await db.insert(discoveredQueries).values({
-            databaseId,
-            queryText,
-            queryHash,
-            normalizedQuery: null, // We could implement query normalization here
-            firstSeenAt: new Date(),
-            lastSeenAt: new Date(),
-            callCount: row.calls,
-            totalTime: row.total_exec_time,
-            minTime: row.min_exec_time,
-            maxTime: row.max_exec_time,
-            meanTime: row.mean_exec_time,
-            isKnown: false,
-            groupId: null,
-            createdAt: new Date(),
-            updatedAt: new Date()
-          });
+          // Store a new collected query
+          await db.insert(collectedQueries)
+            .values({
+              normalizedQueryId,
+              databaseId,
+              queryText,
+              queryHash,
+              calls: row.calls,
+              totalTime: row.total_exec_time,
+              minTime: row.min_exec_time,
+              maxTime: row.max_exec_time,
+              meanTime: row.mean_exec_time,
+              collectedAt: now,
+              lastUpdatedAt: now
+            });
           
           processedCount++;
         }
@@ -284,27 +328,55 @@ router.get('/:id/discovered-queries', async (req, res) => {
       search
     });
     
-    let whereConditions = eq(discoveredQueries.databaseId, databaseId);
+    // Use the aggregated_query_stats view for better performance
+    const query = sql`
+      SELECT 
+        nq.id,
+        nq.database_id as "databaseId",
+        nq.normalized_text as "normalizedText",
+        nq.normalized_hash as "normalizedHash",
+        nq.is_known as "isKnown",
+        nq.group_id as "groupId",
+        nq.first_seen_at as "firstSeenAt",
+        nq.last_seen_at as "lastSeenAt",
+        COUNT(cq.id) as "instanceCount",
+        SUM(cq.calls) as "callCount",
+        SUM(cq.total_time) as "totalTime",
+        MIN(cq.min_time) as "minTime",
+        MAX(cq.max_time) as "maxTime",
+        CASE WHEN SUM(cq.calls) > 0 
+          THEN SUM(cq.total_time) / SUM(cq.calls) 
+          ELSE 0 
+        END as "meanTime",
+        MAX(cq.last_updated_at) as "lastUpdatedAt",
+        (
+          SELECT cq2.query_text
+          FROM collected_queries cq2
+          WHERE cq2.normalized_query_id = nq.id
+          ORDER BY cq2.last_updated_at DESC
+          LIMIT 1
+        ) as "queryText"
+      FROM 
+        normalized_queries nq
+      LEFT JOIN 
+        collected_queries cq ON nq.id = cq.normalized_query_id
+      WHERE 
+        nq.database_id = ${databaseId}
+    `;
+    
+    // Build the WHERE clause based on filters
+    let conditions = [];
     
     // Filter by known status
     if (!showKnown) {
-      whereConditions = and(
-        whereConditions,
-        eq(discoveredQueries.isKnown, false)
-      );
+      conditions.push(sql`nq.is_known = false`);
     }
     
     // Filter by group
     if (groupId === 'ungrouped') {
-      whereConditions = and(
-        whereConditions,
-        isNull(discoveredQueries.groupId)
-      );
+      conditions.push(sql`nq.group_id IS NULL`);
     } else if (groupId && groupId !== 'all_queries') {
-      whereConditions = and(
-        whereConditions,
-        eq(discoveredQueries.groupId, parseInt(groupId))
-      );
+      conditions.push(sql`nq.group_id = ${parseInt(groupId)}`);
     }
     
     // Filter by date range
@@ -312,10 +384,7 @@ router.get('/:id/discovered-queries', async (req, res) => {
       try {
         const parsedStartDate = new Date(startDate);
         if (!isNaN(parsedStartDate.getTime())) {
-          whereConditions = and(
-            whereConditions,
-            gte(discoveredQueries.lastSeenAt, parsedStartDate)
-          );
+          conditions.push(sql`nq.last_seen_at >= ${parsedStartDate}`);
         }
       } catch (error) {
         console.error(`Error parsing start date: ${startDate}`, error);
@@ -326,10 +395,7 @@ router.get('/:id/discovered-queries', async (req, res) => {
       try {
         const parsedEndDate = new Date(endDate);
         if (!isNaN(parsedEndDate.getTime())) {
-          whereConditions = and(
-            whereConditions,
-            lte(discoveredQueries.lastSeenAt, parsedEndDate)
-          );
+          conditions.push(sql`nq.last_seen_at <= ${parsedEndDate}`);
         }
       } catch (error) {
         console.error(`Error parsing end date: ${endDate}`, error);
@@ -340,31 +406,51 @@ router.get('/:id/discovered-queries', async (req, res) => {
     if (search && search.trim()) {
       try {
         const searchPattern = `%${search.trim().replace(/%/g, '\\%').replace(/_/g, '\\_')}%`;
-        whereConditions = and(
-          whereConditions,
-          sql`${discoveredQueries.queryText}::text ILIKE ${searchPattern}`
-        );
-        console.log(`Applied search filter with pattern: ${searchPattern}`);
+        conditions.push(sql`
+          EXISTS (
+            SELECT 1 FROM collected_queries cq_search 
+            WHERE cq_search.normalized_query_id = nq.id 
+            AND cq_search.query_text ILIKE ${searchPattern}
+          )
+        `);
       } catch (error) {
         console.error(`Error applying search filter: ${search}`, error);
       }
     }
     
-    // Order by last seen
-    const results = await db.select()
-      .from(discoveredQueries)
-      .where(whereConditions)
-      .orderBy(desc(discoveredQueries.lastSeenAt))
-      .limit(100);
+    // Combine all conditions
+    let whereClause = '';
+    if (conditions.length > 0) {
+      whereClause = ' AND ' + conditions.map(c => `(${c})`).join(' AND ');
+    }
     
-    console.log(`Found ${results.length} queries matching filters`);
+    // Complete the query
+    const fullQuery = sql`
+      ${query}${sql.raw(whereClause)}
+      GROUP BY 
+        nq.id, 
+        nq.database_id,
+        nq.normalized_text,
+        nq.normalized_hash,
+        nq.is_known,
+        nq.group_id,
+        nq.first_seen_at,
+        nq.last_seen_at
+      ORDER BY MAX(cq.last_updated_at) DESC
+      LIMIT 100
+    `;
+    
+    // Execute the query
+    const results = await db.execute(fullQuery);
+    
+    console.log(`Found ${results.rows.length} queries matching filters`);
     
     // Set cache control headers
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
     
-    return res.json(results);
+    return res.json(results.rows);
   } catch (error) {
     console.error('Error fetching discovered queries:', error);
     return res.status(500).json({ error: 'Failed to fetch queries' });
@@ -380,7 +466,7 @@ router.patch('/:id/discovered-queries', async (req, res) => {
       return res.status(400).json({ error: 'Missing queryId parameter' });
     }
     
-    const updateData: any = {
+    const updateData = {
       updatedAt: new Date()
     };
     
@@ -392,9 +478,9 @@ router.patch('/:id/discovered-queries', async (req, res) => {
       updateData.groupId = groupId === null ? null : groupId;
     }
     
-    await db.update(discoveredQueries)
+    await db.update(normalizedQueries)
       .set(updateData)
-      .where(eq(discoveredQueries.id, queryId));
+      .where(eq(normalizedQueries.id, queryId));
     
     return res.json({ success: true });
   } catch (error) {

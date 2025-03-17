@@ -1,16 +1,107 @@
 import 'dotenv/config';
 import express, { type Request, Response, NextFunction } from "express";
-import { registerRoutes } from "./routes";
-import { setupVite, serveStatic, log } from "./vite";
-import { requestLogger } from './middleware/request-logger';
-import { errorHandler } from './middleware/error-handler';
-import { logger } from './utils/logger';
+import { registerRoutes } from "./routes.js";
+import { setupVite, serveStatic, log } from "./vite.js";
+import { requestLogger } from './middleware/request-logger.js';
+import { errorHandler } from './middleware/error-handler.js';
+import { logger } from './utils/logger.js';
+import { db } from "../db/index.js";
+import { normalizedQueries } from "../db/schema.js";
+import { eq } from "drizzle-orm";
 
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
 app.use(requestLogger);
+
+// Add explicit route for marking queries as known/unknown
+// This needs to be before any catch-all routes
+app.post("/api/databases/:id/mark-query-known", async (req, res) => {
+  try {
+    const databaseId = req.params.id;
+    const { queryId, isKnown } = req.body;
+    
+    logger.info(`API route: Marking query ${queryId} as ${isKnown ? 'known' : 'unknown'} for database ${databaseId}`);
+    
+    if (!queryId) {
+      return res.status(400).json({ error: 'Missing queryId parameter' });
+    }
+    
+    const updateTime = new Date();
+    
+    // Update only the normalizedQueries table (this is what the UI uses)
+    const normalizedResult = await db.update(normalizedQueries)
+      .set({
+        isKnown: isKnown === true,
+        updatedAt: updateTime
+      })
+      .where(eq(normalizedQueries.id, queryId))
+      .returning();
+      
+    logger.info(`Updated normalized query table: ${normalizedResult.length} rows affected`);
+    
+    // If the update was successful, return success
+    if (normalizedResult.length > 0) {
+      logger.info(`Successfully updated query ${queryId}`);
+      return res.json({ 
+        success: true,
+        normalizedUpdated: true,
+      });
+    } else {
+      // If no rows were updated, return an error
+      logger.warn(`Query ${queryId} not found in normalizedQueries table`);
+      return res.status(404).json({ error: 'Query not found' });
+    }
+    
+  } catch (error) {
+    logger.error('Error marking query as known:', error);
+    return res.status(500).json({ error: 'Failed to update query', details: String(error) });
+  }
+});
+
+// Also add a direct endpoint as a fallback
+app.post("/api/query-mark-known", async (req, res) => {
+  try {
+    const { queryId, isKnown, databaseId } = req.body;
+    
+    logger.info(`Direct API route: Marking query ${queryId} as ${isKnown ? 'known' : 'unknown'} for database ${databaseId}`);
+    
+    if (!queryId) {
+      return res.status(400).json({ error: 'Missing queryId parameter' });
+    }
+    
+    const updateTime = new Date();
+    
+    // Update only the normalizedQueries table (this is what the UI uses)
+    const normalizedResult = await db.update(normalizedQueries)
+      .set({
+        isKnown: isKnown === true,
+        updatedAt: updateTime
+      })
+      .where(eq(normalizedQueries.id, queryId))
+      .returning();
+      
+    logger.info(`Updated normalized query table: ${normalizedResult.length} rows affected`);
+    
+    // If the update was successful, return success
+    if (normalizedResult.length > 0) {
+      logger.info(`Successfully updated query ${queryId}`);
+      return res.json({ 
+        success: true,
+        normalizedUpdated: true,
+      });
+    } else {
+      // If no rows were updated, return an error
+      logger.warn(`Query ${queryId} not found in normalizedQueries table`);
+      return res.status(404).json({ error: 'Query not found' });
+    }
+    
+  } catch (error) {
+    logger.error('Error marking query as known:', error);
+    return res.status(500).json({ error: 'Failed to update query', details: String(error) });
+  }
+});
 
 (async () => {
   const server = registerRoutes(app);

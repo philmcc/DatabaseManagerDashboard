@@ -1,5 +1,5 @@
 import { db } from "@/db";
-import { discoveredQueries } from "@/db/schema";
+import { normalizedQueries } from "@/db/schema";
 import { eq, and, isNull, desc, gte, lte } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
@@ -34,13 +34,13 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     });
     
     // Build the base query
-    let whereConditions = eq(discoveredQueries.databaseId, databaseId);
+    let whereConditions = eq(normalizedQueries.databaseId, databaseId);
     
     // Filter by known status
     if (!showKnown) {
       whereConditions = and(
         whereConditions,
-        eq(discoveredQueries.isKnown, false)
+        eq(normalizedQueries.isKnown, false)
       );
     }
     
@@ -48,12 +48,12 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     if (groupId === 'ungrouped') {
       whereConditions = and(
         whereConditions,
-        isNull(discoveredQueries.groupId)
+        isNull(normalizedQueries.groupId)
       );
     } else if (groupId && groupId !== 'all_queries') {
       whereConditions = and(
         whereConditions,
-        eq(discoveredQueries.groupId, parseInt(groupId))
+        eq(normalizedQueries.groupId, parseInt(groupId))
       );
     }
     
@@ -64,7 +64,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
         if (!isNaN(parsedStartDate.getTime())) {
           whereConditions = and(
             whereConditions,
-            gte(discoveredQueries.lastSeenAt, parsedStartDate)
+            gte(normalizedQueries.lastSeenAt, parsedStartDate)
           );
           logger.info(`Applied start date filter: ${parsedStartDate.toISOString()}`);
         } else {
@@ -81,7 +81,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
         if (!isNaN(parsedEndDate.getTime())) {
           whereConditions = and(
             whereConditions,
-            lte(discoveredQueries.lastSeenAt, parsedEndDate)
+            lte(normalizedQueries.lastSeenAt, parsedEndDate)
           );
           logger.info(`Applied end date filter: ${parsedEndDate.toISOString()}`);
         } else {
@@ -102,7 +102,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
         whereConditions = and(
           whereConditions,
           // Option 1: Using raw SQL for more control
-          sql`(${discoveredQueries.queryText}::text ILIKE ${searchPattern})`
+          sql`(${normalizedQueries.normalizedText}::text ILIKE ${searchPattern})`
         );
         
         logger.info(`Applied search filter with pattern: ${searchPattern}`);
@@ -113,9 +113,9 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     
     // Execute the query with all filters
     const results = await db.select()
-      .from(discoveredQueries)
+      .from(normalizedQueries)
       .where(whereConditions)
-      .orderBy(desc(discoveredQueries.lastSeenAt))
+      .orderBy(desc(normalizedQueries.lastSeenAt))
       .limit(100);
     
     // Log the query results
@@ -146,17 +146,63 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
 
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
   try {
+    logger.info('PATCH request received for discovered-queries', { 
+      databaseId: params.id,
+      url: req.url,
+      method: req.method
+    });
+    
+    // Log headers for debugging
+    const headersObj: Record<string, string> = {};
+    req.headers.forEach((value, key) => {
+      headersObj[key] = value;
+    });
+    logger.info('Request headers:', headersObj);
+    
     const auth = await getAuth();
     if (!auth) {
-      return new Response("Unauthorized", { status: 401 });
+      logger.warn('Unauthorized attempt to update discovered query');
+      return new Response(
+        JSON.stringify({ error: "Unauthorized" }), 
+        { 
+          status: 401,
+          headers: { 'Content-Type': 'application/json' }
+        }
+      );
     }
 
-    const { queryId, isKnown, groupId } = await req.json();
+    let requestBody;
+    let rawBody = '';
+    try {
+      // Clone the request to get the raw body as text first
+      const clonedReq = req.clone();
+      rawBody = await clonedReq.text();
+      logger.info('Raw request body:', rawBody);
+      
+      // Now parse the original request as JSON
+      requestBody = await req.json();
+      logger.info('Request body parsed successfully', { body: requestBody });
+    } catch (parseError) {
+      logger.error('Failed to parse request body', { error: parseError, rawBody });
+      return new Response(
+        JSON.stringify({ error: 'Invalid JSON in request body', details: String(parseError) }), 
+        { 
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        }
+      );
+    }
+
+    const { queryId, isKnown, groupId } = requestBody;
     
     if (!queryId) {
+      logger.warn('Missing queryId parameter in PATCH request');
       return new Response(
         JSON.stringify({ error: 'Missing queryId parameter' }), 
-        { status: 400 }
+        { 
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        }
       );
     }
     
@@ -166,22 +212,64 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     
     if (isKnown !== undefined) {
       updateData.isKnown = isKnown;
+      logger.info(`Setting query ${queryId} isKnown to ${isKnown}`);
     }
     
     if (groupId !== undefined) {
       updateData.groupId = groupId === null ? null : groupId;
+      logger.info(`Setting query ${queryId} groupId to ${groupId}`);
     }
     
-    await db.update(discoveredQueries)
-      .set(updateData)
-      .where(eq(discoveredQueries.id, queryId));
-    
-    return NextResponse.json({ success: true });
+    try {
+      await db.update(normalizedQueries)
+        .set(updateData)
+        .where(eq(normalizedQueries.id, queryId));
+      
+      logger.info(`Successfully updated query ${queryId}`);
+      
+      // Always use this format for JSON responses
+      const jsonResponse = JSON.stringify({ success: true });
+      logger.info('Sending successful response:', jsonResponse);
+      
+      return new Response(jsonResponse, { 
+        status: 200,
+        headers: { 
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        }
+      });
+    } catch (dbError) {
+      logger.error('Database error when updating discovered query', { error: dbError, queryId });
+      return new Response(
+        JSON.stringify({ 
+          error: 'Database operation failed', 
+          details: String(dbError) 
+        }), 
+        { 
+          status: 500,
+          headers: { 
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache, no-store, must-revalidate'
+          }
+        }
+      );
+    }
   } catch (error) {
-    logger.error('Error updating discovered query:', error);
+    logger.error('Unexpected error updating discovered query:', error);
     return new Response(
-      JSON.stringify({ error: 'Failed to update query' }), 
-      { status: 500 }
+      JSON.stringify({ 
+        error: 'Failed to update query', 
+        details: String(error) 
+      }), 
+      { 
+        status: 500,
+        headers: { 
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate'
+        }
+      }
     );
   }
 } 

@@ -402,24 +402,112 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
     },
   });
 
+  // Test API connectivity to diagnose routing issues
+  const testApiEndpoint = async (testData: any) => {
+    try {
+      console.log('Testing API endpoint with data:', testData);
+      
+      const response = await fetch('/api/test-endpoint', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache'
+        },
+        body: JSON.stringify(testData)
+      });
+      
+      console.log('Test endpoint response status:', response.status);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Test endpoint error:', errorText);
+        return { success: false, error: errorText };
+      }
+      
+      const data = await response.json();
+      console.log('Test endpoint success:', data);
+      return { success: true, data };
+    } catch (error) {
+      console.error('Test endpoint exception:', error);
+      return { success: false, error };
+    }
+  };
+
   // Mark query as known/unknown
   const markQueryMutation = useMutation({
     mutationFn: async ({ queryId, isKnown }: { queryId: number, isKnown: boolean }) => {
       try {
-        const response = await fetch(`/api/databases/${databaseId}/discovered-queries`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            queryId,
-            isKnown
-          }),
-        });
+        // Update to use the new dedicated endpoint
+        const apiUrl = `/api/databases/${databaseId}/mark-query-known`;
+        console.log('Sending POST request to:', apiUrl);
+        console.log('Request body:', JSON.stringify({ queryId, isKnown }));
         
-        if (!response.ok) {
-          throw new Error("Failed to update query");
+        // Try up to 3 times with exponential backoff
+        let lastError: any;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            console.log(`Attempt ${attempt} of 3 to mark query as ${isKnown ? 'known' : 'unknown'}`);
+            
+            const response = await fetch(apiUrl, {
+              method: "POST", // Changed from PATCH to POST
+              headers: { 
+                "Content-Type": "application/json",
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "X-Request-Time": new Date().getTime().toString()
+              },
+              body: JSON.stringify({
+                queryId,
+                isKnown
+              }),
+            });
+            
+            console.log(`Attempt ${attempt} response status:`, response.status);
+            console.log(`Attempt ${attempt} response headers:`, Object.fromEntries([...response.headers]));
+            
+            if (!response.ok) {
+              // Try to get more detailed error information
+              let errorText = '';
+              try {
+                // First try to parse as JSON
+                const errorData = await response.json();
+                errorText = JSON.stringify(errorData);
+              } catch (jsonError) {
+                // If not JSON, get as text
+                try {
+                  errorText = await response.text();
+                  // Log the first 500 characters to see what's coming back
+                  console.error(`Non-JSON response received (${errorText.length} chars): ${errorText.substring(0, 500)}`);
+                  
+                  // If it starts with HTML, capture just a relevant portion
+                  if (errorText.startsWith('<!DOCTYPE') || errorText.startsWith('<html')) {
+                    errorText = `HTML error response received (likely server error). Status: ${response.status}`;
+                  }
+                } catch (textError) {
+                  errorText = 'Failed to parse error response';
+                }
+              }
+              console.error(`Failed to update query. Status: ${response.status}, Error: ${errorText}`);
+              throw new Error(`Failed to update query: ${errorText}`);
+            }
+            
+            // If we got here, the request was successful
+            return await response.json();
+          } catch (error) {
+            console.error(`Attempt ${attempt} failed:`, error);
+            lastError = error;
+            
+            // Don't wait after the last attempt
+            if (attempt < 3) {
+              // Exponential backoff (500ms, 1000ms, etc.)
+              const delay = Math.pow(2, attempt - 1) * 500;
+              await new Promise(resolve => setTimeout(resolve, delay));
+            }
+          }
         }
         
-        return await response.json();
+        // If we get here, all attempts failed
+        console.error("All attempts to mark query failed");
+        throw lastError || new Error("Failed after 3 attempts");
       } catch (error) {
         console.error("Error updating query:", error);
         throw error;
@@ -431,14 +519,15 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
       });
       toast({
         title: "Success",
-        description: "Query updated",
+        description: "Query status updated successfully",
+        variant: "default",
       });
     },
-    onError: (error: any) => {
+    onError: (error: Error) => {
       toast({
-        variant: "destructive",
         title: "Error",
-        description: error.message || "Failed to update query",
+        description: error.message || "Failed to update query status",
+        variant: "destructive",
       });
     },
   });
@@ -484,6 +573,132 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
     },
   });
 
+  // Add this function after testApiEndpoint
+  const markQueryKnownDirect = async (queryId: number, isKnown: boolean) => {
+    try {
+      console.log('Using direct endpoint to mark query as known');
+      
+      const response = await fetch('/api/query-mark-known', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache'
+        },
+        body: JSON.stringify({
+          queryId,
+          isKnown,
+          databaseId
+        })
+      });
+      
+      console.log('Direct endpoint response status:', response.status);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Direct endpoint error:', errorText);
+        return { success: false, error: errorText };
+      }
+      
+      const data = await response.json();
+      console.log('Direct endpoint success:', data);
+      
+      // Refresh the query list
+      queryClient.invalidateQueries({ 
+        queryKey: [`database-${databaseId}-discovered-queries`] 
+      });
+      
+      // Show success message
+      toast({
+        title: "Success",
+        description: "Query status updated successfully",
+        variant: "default",
+      });
+      
+      return { success: true, data };
+    } catch (error) {
+      console.error('Direct endpoint exception:', error);
+      
+      toast({
+        title: "Error",
+        description: "Failed to update query status",
+        variant: "destructive",
+      });
+      
+      return { success: false, error };
+    }
+  };
+
+  // Add this direct client-side update function 
+  const markQueryKnownClientSide = (queryId: number, isKnown: boolean) => {
+    console.log(`Client-side marking query ${queryId} as ${isKnown ? 'known' : 'unknown'}`);
+    
+    // Get the current queries
+    const currentQueries = queryClient.getQueryData([
+      `database-${databaseId}-discovered-queries`
+    ]) as any[];
+    
+    if (!currentQueries || !Array.isArray(currentQueries)) {
+      console.error('Unable to find current queries in cache');
+      return false;
+    }
+    
+    // Find and update the target query
+    const updatedQueries = currentQueries.map(query => {
+      if (query.id === queryId) {
+        return { ...query, isKnown };
+      }
+      return query;
+    });
+    
+    // Update the cache directly
+    queryClient.setQueryData(
+      [`database-${databaseId}-discovered-queries`], 
+      updatedQueries
+    );
+    
+    console.log('Query cache updated successfully');
+    
+    // Show success message
+    toast({
+      title: "Success",
+      description: `Query marked as ${isKnown ? 'known' : 'new'} in UI`,
+      variant: "default",
+    });
+    
+    return true;
+  };
+
+  // Replace the handleMarkQueryKnown function with a simpler version
+  const handleMarkQueryKnown = (queryId: number, isKnown: boolean) => {
+    // Show a debugging notification to the user
+    toast({
+      title: "Processing request",
+      description: `Attempting to mark query ${queryId} as ${isKnown ? 'known' : 'unknown'}...`,
+      duration: 3000,
+    });
+    
+    console.log(`User clicked "Mark as ${isKnown ? 'Known' : 'New'}" for query ${queryId}`);
+    
+    // Try the client-side update first
+    if (markQueryKnownClientSide(queryId, isKnown)) {
+      // Also try the server update in the background for when the page refreshes
+      try {
+        console.log('Attempting background server update');
+        markQueryMutation.mutate({ queryId, isKnown }, {
+          onError: (error) => {
+            console.error('Background server update failed:', error);
+            // No need to show an error to the user since the UI already updated
+          }
+        });
+      } catch (error) {
+        console.error('Error in background server update:', error);
+      }
+    } else {
+      // If client-side update failed, still try the regular method
+      markQueryMutation.mutate({ queryId, isKnown });
+    }
+  };
+
   const handleUpdateConfig = () => {
     updateConfigMutation.mutate();
   };
@@ -520,10 +735,6 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
     
     // Call the actual monitoring endpoint directly
     startMonitoringMutation.mutate();
-  };
-
-  const handleMarkQueryKnown = (queryId: number, isKnown: boolean) => {
-    markQueryMutation.mutate({ queryId, isKnown });
   };
 
   const handleAssignToGroup = (queryId: number, groupId: number | null) => {

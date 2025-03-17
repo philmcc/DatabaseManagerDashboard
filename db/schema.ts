@@ -456,3 +456,32 @@ export const selectDiscoveredQuerySchema = createSelectSchema(discoveredQueries)
 export type InsertQueryMonitoringConfig = typeof queryMonitoringConfigs.$inferInsert;
 export type InsertQueryGroup = typeof queryGroups.$inferInsert;
 export type InsertDiscoveredQuery = typeof discoveredQueries.$inferInsert;
+
+// New improved query monitoring tables
+export const normalizedQueries = pgTable("normalized_queries", {
+  id: serial("id").primaryKey(),
+  databaseId: integer("database_id").notNull().references(() => databaseConnections.id, { onDelete: 'cascade' }),
+  normalizedText: text("normalized_text").notNull(),
+  normalizedHash: text("normalized_hash").notNull(),
+  firstSeenAt: timestamp("first_seen_at").notNull().defaultNow(),
+  lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
+  isKnown: boolean("is_known").notNull().default(false),
+  groupId: integer("group_id").references(() => queryGroups.id),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const collectedQueries = pgTable("collected_queries", {
+  id: serial("id").primaryKey(),
+  normalizedQueryId: integer("normalized_query_id").notNull().references(() => normalizedQueries.id, { onDelete: 'cascade' }),
+  databaseId: integer("database_id").notNull().references(() => databaseConnections.id, { onDelete: 'cascade' }),
+  queryText: text("query_text").notNull(),
+  queryHash: text("query_hash").notNull(),
+  calls: integer("calls").notNull(),
+  totalTime: numeric("total_time").notNull(),
+  minTime: numeric("min_time"),
+  maxTime: numeric("max_time"),
+  meanTime: numeric("mean_time"),
+  collectedAt: timestamp("collected_at").notNull().defaultNow(),
+  lastUpdatedAt: timestamp("last_updated_at").notNull().defaultNow(),
+});

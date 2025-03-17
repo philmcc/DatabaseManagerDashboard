@@ -40,8 +40,8 @@ type DiscoveredQuery = {
   id: number;
   databaseId: number;
   queryText: string;
-  queryHash: string;
-  normalizedQuery: string | null;
+  normalizedText?: string;
+  normalizedHash?: string;
   firstSeenAt: string;
   lastSeenAt: string;
   callCount: number;
@@ -51,6 +51,10 @@ type DiscoveredQuery = {
   meanTime: number | null;
   isKnown: boolean;
   groupId: number | null;
+  instanceCount?: number;  // Number of collected query instances
+  queryHash?: string;      // For backward compatibility
+  normalizedQuery?: string | null; // For backward compatibility
+  lastUpdatedAt?: string;  // When the query was last updated
 };
 
 const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
@@ -847,6 +851,8 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
                         <div><strong>Search:</strong> "{searchQuery || '(none)'}"</div>
                         <div><strong>Query Count:</strong> {queries.length}</div>
                         <div><strong>Last Fetch:</strong> {new Date().toISOString()}</div>
+                        <div><strong>Schema:</strong> Using new normalized queries schema</div>
+                        <div><strong>Instance Count Available:</strong> {queries.length > 0 && queries.some(q => q.instanceCount !== undefined) ? 'Yes' : 'No'}</div>
                       </div>
                     </details>
                   </div>
@@ -898,6 +904,11 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
                                   <div>
                                     <span className="font-medium">Calls:</span> {query.callCount}
                                   </div>
+                                  {query.instanceCount !== undefined && (
+                                    <div>
+                                      <span className="font-medium">Instances:</span> {query.instanceCount}
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             </AccordionTrigger>
@@ -918,6 +929,16 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
                                     <div className="text-sm">
                                       <span className="font-medium">Call count:</span> {query.callCount}
                                     </div>
+                                    {query.instanceCount !== undefined && (
+                                      <div className="text-sm">
+                                        <span className="font-medium">Query instances:</span> {query.instanceCount}
+                                      </div>
+                                    )}
+                                    {query.lastUpdatedAt && (
+                                      <div className="text-sm">
+                                        <span className="font-medium">Last updated:</span> {formatDistanceToNow(new Date(query.lastUpdatedAt))} ago
+                                      </div>
+                                    )}
                                   </div>
                                   
                                   <div className="space-y-2">
@@ -936,8 +957,23 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
                                         <span className="font-medium">Max time:</span> {typeof query.maxTime === 'number' ? query.maxTime.toFixed(2) : query.maxTime} ms
                                       </div>
                                     )}
+                                    {query.totalTime !== null && query.totalTime !== undefined && (
+                                      <div className="text-sm">
+                                        <span className="font-medium">Total time:</span> {typeof query.totalTime === 'number' ? query.totalTime.toFixed(2) : query.totalTime} ms
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
+                                
+                                {/* Normalized Query Information */}
+                                {(query.normalizedText || query.normalizedQuery) && (
+                                  <div className="mt-4 pt-2 border-t">
+                                    <div className="mb-2 font-medium text-sm">Normalized Form:</div>
+                                    <div className="bg-muted p-3 rounded-md overflow-x-auto">
+                                      <pre className="text-xs whitespace-pre-wrap break-all">{query.normalizedText || query.normalizedQuery}</pre>
+                                    </div>
+                                  </div>
+                                )}
                                 
                                 <div className="flex items-center justify-between pt-2 border-t">
                                   <div className="flex items-center gap-2">

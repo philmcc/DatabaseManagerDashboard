@@ -21,16 +21,16 @@ function normalizeQuery(query) {
 
     let normalizedQuery = query.trim();
 
-    // Replace quoted strings with a placeholder
-    normalizedQuery = normalizedQuery.replace(/'[^']*'/g, "'?'");
-    normalizedQuery = normalizedQuery.replace(/"[^"]*"/g, '"?"');
+    // Replace IN clauses with multiple parameters with a generic form
+    // This handles cases like "IN ($1, $2, $3)" or "IN ($4, $5, $6)"
+    normalizedQuery = normalizedQuery.replace(/\bIN\s*\(\s*(\$\d+\s*,\s*)*\$\d+\s*\)/gi, 'IN ($?)');
+    
+    // After handling specific patterns like IN clauses, replace remaining $n parameters
+    normalizedQuery = normalizedQuery.replace(/\$\d+/g, '$?');
 
-    // Replace numbers with a placeholder
-    normalizedQuery = normalizedQuery.replace(/\b\d+\b/g, '?');
-
-    // Replace IN clauses with a single parameter
-    // This handles cases like "IN (1, 2, 3)" or "IN ('a', 'b', 'c')"
-    normalizedQuery = normalizedQuery.replace(/\bIN\s*\([^)]+\)/gi, 'IN (?)');
+    // Handle OFFSET $n and LIMIT $n (for clarity, though already replaced by the step above)
+    normalizedQuery = normalizedQuery.replace(/\bOFFSET\s+\$\?/gi, 'OFFSET $?');
+    normalizedQuery = normalizedQuery.replace(/\bLIMIT\s+\$\?/gi, 'LIMIT $?');
 
     // Replace multiple whitespace with a single space
     normalizedQuery = normalizedQuery.replace(/\s+/g, ' ');

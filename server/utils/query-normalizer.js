@@ -2,7 +2,7 @@
 /**
  * SQL Query Normalizer utility
  *
- * This utility normalizes SQL queries by replacing literal values with placeholders.
+ * This utility normalizes SQL queries by replacing parameter values with placeholders.
  * It helps in identifying structurally identical queries that might have different
  * parameter values, particularly in IN clauses with varying numbers of parameters.
  */
@@ -16,10 +16,11 @@ exports.normalizeAndHashQuery = normalizeAndHashQuery;
 var crypto_1 = __importDefault(require("crypto"));
 var logger_js_1 = require("../utils/logger.js");
 /**
- * Normalizes a SQL query by replacing literal values with placeholders.
+ * Normalizes a SQL query by replacing parameter values with generic placeholders.
+ * Preserves column names and query structure while normalizing only parameter values.
  *
  * @param query The SQL query to normalize
- * @returns The normalized query with literals replaced by placeholders
+ * @returns The normalized query with parameter values replaced by placeholders
  */
 function normalizeQuery(query) {
     try {
@@ -27,14 +28,17 @@ function normalizeQuery(query) {
             return '';
         }
         var normalizedQuery = query.trim();
-        // Replace quoted strings with a placeholder
-        normalizedQuery = normalizedQuery.replace(/'[^']*'/g, "'?'");
-        normalizedQuery = normalizedQuery.replace(/"[^"]*"/g, '"?"');
-        // Replace numbers with a placeholder
-        normalizedQuery = normalizedQuery.replace(/\b\d+\b/g, '?');
-        // Replace IN clauses with a single parameter
-        // This handles cases like "IN (1, 2, 3)" or "IN ('a', 'b', 'c')"
-        normalizedQuery = normalizedQuery.replace(/\bIN\s*\([^)]+\)/gi, 'IN (?)');
+        // Replace IN clauses with multiple parameters with a generic form
+        // This handles cases like "IN ($1, $2, $3)" or "IN ($4, $5, $6)"
+        normalizedQuery = normalizedQuery.replace(/\bIN\s*\(\s*(\$\d+\s*,\s*)*\$\d+\s*\)/gi, 'IN ($?)');
+        
+        // After handling specific patterns like IN clauses, replace remaining $n parameters
+        normalizedQuery = normalizedQuery.replace(/\$\d+/g, '$?');
+        
+        // Handle OFFSET $n and LIMIT $n (for clarity, though already replaced by the step above)
+        normalizedQuery = normalizedQuery.replace(/\bOFFSET\s+\$\?/gi, 'OFFSET $?');
+        normalizedQuery = normalizedQuery.replace(/\bLIMIT\s+\$\?/gi, 'LIMIT $?');
+        
         // Replace multiple whitespace with a single space
         normalizedQuery = normalizedQuery.replace(/\s+/g, ' ');
         return normalizedQuery;

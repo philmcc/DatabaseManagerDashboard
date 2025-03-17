@@ -11,6 +11,7 @@ import { SSHTunnel } from "./lib/ssh-tunnel";
 import { getInstanceConnection, getDatabaseConnection } from "./lib/database";
 import { logger } from "./lib/logger";
 import crypto from 'crypto';
+import { normalizeAndHashQuery } from './utils/query-normalizer.js';
 
 const { Pool, Client } = pg;
 
@@ -3151,13 +3152,13 @@ export function registerRoutes(app: Express): Server {
         for (const row of result.rows) {
           const queryText = row.query;
           
-          // Generate a hash of the query for comparison
-          const queryHash = crypto.createHash('md5').update(queryText).digest('hex');
+          // Use the query normalizer utility to get normalized query and hash
+          const { normalizedQuery, normalizedHash } = normalizeAndHashQuery(queryText);
           
-          // Check if query already exists
+          // Check if query already exists by normalized hash
           const existingQuery = await db.query.discoveredQueries.findFirst({
             where: and(
-              eq(discoveredQueries.queryHash, queryHash),
+              eq(discoveredQueries.normalizedQuery, normalizedQuery),
               eq(discoveredQueries.databaseId, databaseId)
             )
           });
@@ -3167,21 +3168,24 @@ export function registerRoutes(app: Express): Server {
             await db.update(discoveredQueries)
               .set({
                 lastSeenAt: new Date(),
-                callCount: row.calls,
-                totalTime: row.total_exec_time,
-                minTime: row.min_exec_time,
-                maxTime: row.max_exec_time,
-                meanTime: row.mean_exec_time,
+                callCount: existingQuery.callCount + row.calls,
+                totalTime: Number(existingQuery.totalTime) + Number(row.total_exec_time),
+                minTime: Math.min(Number(existingQuery.minTime || Infinity), Number(row.min_exec_time)),
+                maxTime: Math.max(Number(existingQuery.maxTime || 0), Number(row.max_exec_time)),
+                meanTime: (Number(existingQuery.totalTime) + Number(row.total_exec_time)) / 
+                          (existingQuery.callCount + row.calls),
                 updatedAt: new Date()
               })
               .where(eq(discoveredQueries.id, existingQuery.id));
+              
+            logger.debug(`Updated existing query: ${normalizedQuery.substring(0, 80)}...`);
           } else {
             // Insert new query
             await db.insert(discoveredQueries).values({
               databaseId,
               queryText,
-              queryHash,
-              normalizedQuery: null, // We'll implement query normalization later
+              queryHash: crypto.createHash('md5').update(queryText).digest('hex'),
+              normalizedQuery,
               firstSeenAt: new Date(),
               lastSeenAt: new Date(),
               callCount: row.calls,
@@ -3195,7 +3199,7 @@ export function registerRoutes(app: Express): Server {
               updatedAt: new Date()
             });
             
-            logger.info(`Discovered new query: ${queryText.substring(0, 100)}...`);
+            logger.info(`Discovered new query: ${normalizedQuery.substring(0, 80)}...`);
           }
         }
         

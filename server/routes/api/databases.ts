@@ -6,6 +6,7 @@ import { getDatabaseConnection } from '@/lib/database';
 import crypto from 'crypto';
 import queryMonitoringRouter from './query-monitoring';
 import { requireAuth } from '@/lib/auth';
+import { normalizeAndHashQuery } from '../../utils/query-normalizer.js';
 
 const router = express.Router();
 
@@ -78,39 +79,47 @@ router.post('/:id/query-monitoring/start', async (req, res) => {
   try {
     const databaseId = parseInt(req.params.id);
     
-    // Log the action
-    console.log(`Starting query monitoring for database ${databaseId}`);
-    
-    // Get the monitoring config
-    const config = await db.query.queryMonitoringConfigs.findFirst({
-      where: eq(queryMonitoringConfigs.databaseId, databaseId)
+    // Check if the database exists and user has access
+    const database = await db.query.databaseConnections.findFirst({
+      where: eq(databaseConnections.id, databaseId)
     });
-    
-    // If config doesn't exist, create a default one
-    if (!config) {
-      console.log(`No monitoring config found for database ${databaseId}, creating default`);
-      
-      const result = await db.insert(queryMonitoringConfigs).values({
-        databaseId,
-        isActive: true,
-        intervalMinutes: 15,
-        userId: req.user?.id || 1, // Default to user 1 if auth not implemented
-        createdAt: new Date(),
-        updatedAt: new Date()
-      }).returning();
-      
-      console.log('Created default monitoring config:', result);
+
+    if (!database) {
+      return res.status(404).json({ error: 'Database not found' });
     }
-    
-    if (!config.isActive) {
-      return res.status(400).json({ error: 'Monitoring is not active for this database' });
+
+    // Check if there's already an active monitoring config
+    const existingConfig = await db.query.queryMonitoringConfigs.findFirst({
+      where: and(
+        eq(queryMonitoringConfigs.databaseId, databaseId),
+        eq(queryMonitoringConfigs.isActive, true)
+      )
+    });
+
+    let configId;
+    if (existingConfig) {
+      configId = existingConfig.id;
+      await db.update(queryMonitoringConfigs)
+        .set({
+          updatedAt: new Date()
+        })
+        .where(eq(queryMonitoringConfigs.id, configId));
+    } else {
+      // Create a new monitoring config
+      const [newConfig] = await db.insert(queryMonitoringConfigs)
+        .values({
+          databaseId,
+          isActive: true,
+          intervalMinutes: 15,
+          userId: 1, // Default system user for now
+          createdAt: new Date(),
+          updatedAt: new Date()
+        })
+        .returning();
+
+      configId = newConfig.id;
     }
-    
-    // Update last run time
-    await db.update(queryMonitoringConfigs)
-      .set({ lastRunAt: new Date() })
-      .where(eq(queryMonitoringConfigs.id, config.id));
-    
+
     // Start the monitoring process
     // This would normally be a background job, but for simplicity we'll do it synchronously
     try {
@@ -152,15 +161,15 @@ router.post('/:id/query-monitoring/start', async (req, res) => {
       for (const row of queriesResult.rows) {
         const queryText = row.query;
         
-        // Generate a hash for the query
-        const queryHash = crypto
-          .createHash('md5')
-          .update(queryText)
-          .digest('hex');
+        // Use the query normalization utility
+        const { normalizedQuery, normalizedHash } = normalizeAndHashQuery(queryText);
         
-        // Check if query exists
+        // Check if query exists by normalized query
         const existingQuery = await db.query.discoveredQueries.findFirst({
-          where: eq(discoveredQueries.queryHash, queryHash)
+          where: and(
+            eq(discoveredQueries.normalizedQuery, normalizedQuery),
+            eq(discoveredQueries.databaseId, databaseId)
+          )
         });
         
         if (existingQuery) {
@@ -168,11 +177,12 @@ router.post('/:id/query-monitoring/start', async (req, res) => {
           await db.update(discoveredQueries)
             .set({
               lastSeenAt: new Date(),
-              callCount: row.calls,
-              totalTime: row.total_exec_time,
-              minTime: row.min_exec_time,
-              maxTime: row.max_exec_time,
-              meanTime: row.mean_exec_time,
+              callCount: existingQuery.callCount + row.calls,
+              totalTime: Number(existingQuery.totalTime) + Number(row.total_exec_time),
+              minTime: Math.min(Number(existingQuery.minTime || Infinity), Number(row.min_exec_time)),
+              maxTime: Math.max(Number(existingQuery.maxTime || 0), Number(row.max_exec_time)),
+              meanTime: (Number(existingQuery.totalTime) + Number(row.total_exec_time)) / 
+                      (existingQuery.callCount + row.calls),
               updatedAt: new Date()
             })
             .where(eq(discoveredQueries.id, existingQuery.id));
@@ -181,8 +191,8 @@ router.post('/:id/query-monitoring/start', async (req, res) => {
           await db.insert(discoveredQueries).values({
             databaseId,
             queryText,
-            queryHash,
-            normalizedQuery: null, // We could implement query normalization here
+            queryHash: crypto.createHash('md5').update(queryText).digest('hex'),
+            normalizedQuery,
             firstSeenAt: new Date(),
             lastSeenAt: new Date(),
             callCount: row.calls,

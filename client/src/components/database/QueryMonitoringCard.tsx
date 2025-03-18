@@ -1110,7 +1110,7 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
                                 </div>
                                 <div className="flex items-center gap-4 text-sm text-muted-foreground">
                                   <div>
-                                    <span className="font-medium">Last seen:</span> {formatDistanceToNow(new Date(query.lastSeenAt))} ago
+                                    <span className="font-medium">First seen:</span> {formatDistanceToNow(new Date(query.firstSeenAt))} ago
                                   </div>
                                   <div>
                                     <span className="font-medium">Calls:</span> {query.callCount}

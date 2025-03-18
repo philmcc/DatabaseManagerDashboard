@@ -3381,8 +3381,7 @@ export function registerRoutes(app: Express): Server {
         GROUP BY 
           nq.id, nq.database_id, nq.normalized_text, nq.normalized_hash, 
           nq.is_known, nq.group_id, nq.first_seen_at, nq.last_seen_at
-        ORDER BY 
-          nq.last_seen_at DESC
+        ORDER BY nq.first_seen_at DESC
         LIMIT 100
       `;
       

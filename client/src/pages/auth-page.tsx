@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useUser } from "@/hooks/use-user";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -12,11 +12,18 @@ export default function AuthPage() {
   const [isLogin, setIsLogin] = useState(true);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const { login, register } = useUser();
+  const { user, login, register } = useUser();
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const [isLoading, setIsLoading] = useState(false);
   const queryClient = useQueryClient();
+
+  // Redirect to dashboard if already logged in
+  useEffect(() => {
+    if (user) {
+      setLocation("/dashboard");
+    }
+  }, [user, setLocation]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,11 +37,17 @@ export default function AuthPage() {
             ? "Welcome back!" 
             : "Your account has been created. Please wait for admin approval.",
         });
+        
         if (isLogin) {
-          setLocation("/dashboard");
+          // Force refetch user data and wait for it
+          await queryClient.invalidateQueries({ queryKey: ['user'] });
+          await queryClient.refetchQueries({ queryKey: ['user'] });
+          
+          // Small delay to ensure state updates are processed
+          setTimeout(() => {
+            setLocation("/dashboard");
+          }, 100);
         } else {
-          // Invalidate users query after successful registration
-          queryClient.invalidateQueries({ queryKey: ['/api/users'] });
           // Stay on the login page after registration
           setIsLogin(true);
           setUsername("");
@@ -44,14 +57,14 @@ export default function AuthPage() {
         toast({
           variant: "destructive",
           title: "Error",
-          description: result.message,
+          description: result.message || "Authentication failed",
         });
       }
-    } catch (error) {
+    } catch (error: any) {
       toast({
         variant: "destructive",
         title: "Error",
-        description: isLogin ? "Login failed" : "Registration failed",
+        description: error.message || (isLogin ? "Login failed" : "Registration failed"),
       });
     } finally {
       setIsLoading(false);

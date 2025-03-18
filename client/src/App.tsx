@@ -1,4 +1,4 @@
-import { Switch, Route } from "wouter";
+import { Switch, Route, Redirect } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -44,13 +44,23 @@ function Router() {
       <Route path="/auth" component={AuthPage} />
       <Route path="/reset-password" component={ResetPassword} />
       
+      {/* Root path redirect based on auth status */}
+      <Route path="/" exact>
+        {() => {
+          if (!user) {
+            return <Redirect to="/auth" />;
+          }
+          return <Redirect to="/dashboard" />;
+        }}
+      </Route>
+
+      {/* Protected routes */}
       {!user ? (
-        <Route path="/:rest*" component={AuthPage} />
+        <Route path="/:rest*">
+          {() => <Redirect to="/auth" />}
+        </Route>
       ) : (
         <>
-          <Route path="/" exact>
-            {() => <Redirect to="/dashboard" />}
-          </Route>
           <Route path="/dashboard" component={Dashboard} />
           <Route path="/profile-settings" component={ProfileSettings} />
           <Route path="/logs" component={LogsPage} />

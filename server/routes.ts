@@ -3376,13 +3376,12 @@ export function registerRoutes(app: Express): Server {
         params.push(`%${search.trim()}%`);
       }
       
-      // Add GROUP BY, ORDER BY, and LIMIT
+      // Add group by and order by clauses
       queryStr += `
         GROUP BY 
           nq.id, nq.database_id, nq.normalized_text, nq.normalized_hash, 
           nq.is_known, nq.group_id, nq.first_seen_at, nq.last_seen_at
         ORDER BY nq.first_seen_at DESC
-        LIMIT 100
       `;
       
       // Execute the query

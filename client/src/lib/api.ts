@@ -1,4 +1,5 @@
 import { useLocation } from 'wouter';
+import axios, { AxiosInstance, InternalAxiosRequestConfig, AxiosResponse } from 'axios';
 
 interface LoginCredentials {
   username: string;
@@ -20,6 +21,35 @@ interface DatabaseData {
 
 // Create a new helper file for API calls
 export const API_BASE = '/api';
+
+const axiosInstance: AxiosInstance = axios.create({
+  baseURL: '/api',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+// Add request interceptor to handle authentication
+axiosInstance.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+  const token = localStorage.getItem('token');
+  if (token && config.headers) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// Add response interceptor to handle errors
+axiosInstance.interceptors.response.use(
+  (response: AxiosResponse) => response,
+  (error: unknown) => {
+    if (axios.isAxiosError(error) && error.response?.status === 401) {
+      // Handle unauthorized access
+      localStorage.removeItem('token');
+      window.location.href = '/login';
+    }
+    return Promise.reject(error);
+  }
+);
 
 export const apiRequest = async (endpoint: string, options: RequestInit = {}) => {
   // Ensure endpoint starts with a slash
@@ -65,9 +95,9 @@ export const apiRequest = async (endpoint: string, options: RequestInit = {}) =>
     }
     
     return response.json();
-  } catch (error) {
+  } catch (error: unknown) {
     // If it's already handled (like auth redirect), just return null
-    if (error.handled) {
+    if (error instanceof Error && 'handled' in error && error.handled) {
       return null;
     }
     throw error;

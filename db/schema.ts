@@ -485,3 +485,67 @@ AFTER INSERT OR UPDATE OR DELETE ON collected_queries
 FOR EACH ROW
 EXECUTE FUNCTION update_distinct_query_count();
 `;
+
+export const queryMonitoringSessions = pgTable("query_monitoring_sessions", {
+  id: serial("id").primaryKey(),
+  databaseId: integer("database_id").notNull().references(() => databaseConnections.id, { onDelete: 'cascade' }),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  status: text("status").notNull(), // 'running', 'stopped', 'completed'
+  pollingIntervalSeconds: integer("polling_interval_seconds").notNull().default(60),
+  scheduledEndTime: timestamp("scheduled_end_time"),
+  startedAt: timestamp("started_at").notNull().defaultNow(),
+  stoppedAt: timestamp("stopped_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const queryExamples = pgTable("query_examples", {
+  id: serial("id").primaryKey(),
+  normalizedQueryId: integer("normalized_query_id").notNull().references(() => normalizedQueries.id, { onDelete: 'cascade' }),
+  databaseId: integer("database_id").notNull().references(() => databaseConnections.id, { onDelete: 'cascade' }),
+  sessionId: integer("session_id").notNull().references(() => queryMonitoringSessions.id, { onDelete: 'cascade' }),
+  queryText: text("query_text").notNull(),
+  queryHash: text("query_hash").notNull(),
+  executionTime: numeric("execution_time"),
+  collectedAt: timestamp("collected_at").notNull().defaultNow(),
+});
+
+// Relations for new tables
+export const queryMonitoringSessionRelations = relations(queryMonitoringSessions, ({ one, many }) => ({
+  database: one(databaseConnections, {
+    fields: [queryMonitoringSessions.databaseId],
+    references: [databaseConnections.id],
+  }),
+  user: one(users, {
+    fields: [queryMonitoringSessions.userId],
+    references: [users.id],
+  }),
+  examples: many(queryExamples),
+}));
+
+export const queryExampleRelations = relations(queryExamples, ({ one }) => ({
+  normalizedQuery: one(normalizedQueries, {
+    fields: [queryExamples.normalizedQueryId],
+    references: [normalizedQueries.id],
+  }),
+  database: one(databaseConnections, {
+    fields: [queryExamples.databaseId],
+    references: [databaseConnections.id],
+  }),
+  session: one(queryMonitoringSessions, {
+    fields: [queryExamples.sessionId],
+    references: [queryMonitoringSessions.id],
+  }),
+}));
+
+// Create schemas for new tables
+export const insertQueryMonitoringSessionSchema = createInsertSchema(queryMonitoringSessions);
+export const selectQueryMonitoringSessionSchema = createSelectSchema(queryMonitoringSessions);
+export const insertQueryExampleSchema = createInsertSchema(queryExamples);
+export const selectQueryExampleSchema = createSelectSchema(queryExamples);
+
+// Define types for new tables
+export type InsertQueryMonitoringSession = typeof queryMonitoringSessions.$inferInsert;
+export type SelectQueryMonitoringSession = typeof queryMonitoringSessions.$inferSelect;
+export type InsertQueryExample = typeof queryExamples.$inferInsert;
+export type SelectQueryExample = typeof queryExamples.$inferSelect;

@@ -8,6 +8,20 @@
       "when": 1742306465375,
       "tag": "0000_tricky_lucky_pierre",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1742306465376,
+      "tag": "0001_add_query_count_triggers",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1742306465377,
+      "tag": "0002_add_query_samples",
+      "breakpoints": true
     }
   ]
 }

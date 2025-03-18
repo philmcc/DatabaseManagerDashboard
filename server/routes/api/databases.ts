@@ -1,14 +1,35 @@
 import express from 'express';
-import { db } from '@/db';
-import { queryMonitoringConfigs, queryGroups, normalizedQueries, collectedQueries } from '@/db/schema';
+import { db } from '../../../db/index.js';
+import { queryMonitoringConfigs, queryGroups, normalizedQueries, collectedQueries, databaseOperationLogs, databaseConnections, querySamples } from '../../../db/schema.js';
 import { eq, and, isNull, desc, gte, lte, sql } from 'drizzle-orm';
-import { getDatabaseConnection } from '@/lib/database';
+import { createInsertSchema } from 'drizzle-zod';
+import { getDatabaseConnection } from '../../lib/database.js';
 import crypto from 'crypto';
-import queryMonitoringRouter from './query-monitoring';
-import { requireAuth } from '@/lib/auth';
+import queryMonitoringRouter from './query-monitoring.js';
+import { requireAuth } from '../../middleware/auth.js';
 import { normalizeAndHashQuery } from '../../utils/query-normalizer.js';
 
 const router = express.Router();
+
+// Create a more robust auth middleware
+const robustAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  // For development, allow requests without authentication
+  if (process.env.NODE_ENV === 'development') {
+    // Add a mock user for development
+    req.user = {
+      id: 1,
+      username: 'dev',
+      role: 'ADMIN'
+    } as any;
+    return next();
+  }
+  
+  // For production, use the real auth middleware
+  return requireAuth(req, res, next);
+};
+
+// Create insert schemas
+const insertCollectedQuerySchema = createInsertSchema(collectedQueries);
 
 // Get query monitoring config
 router.get('/:id/query-monitoring/config', async (req, res) => {
@@ -123,111 +144,114 @@ router.post('/:id/query-monitoring/start', async (req, res) => {
     // Start the monitoring process
     // This would normally be a background job, but for simplicity we'll do it synchronously
     try {
-      const dbConnection = await getDatabaseConnection(databaseId);
+      const { connection: dbConnection, cleanup } = await getDatabaseConnection(databaseId);
       
-      // Check if pg_stat_statements extension is available
-      const extensionResult = await dbConnection.query(
-        "SELECT * FROM pg_extension WHERE extname = 'pg_stat_statements'"
-      );
-      
-      if (extensionResult.rows.length === 0) {
-        return res.status(400).json({ 
-          error: 'pg_stat_statements extension is not installed',
-          message: 'Please install pg_stat_statements extension in your database'
-        });
-      }
-      
-      // Get queries from pg_stat_statements
-      const queriesResult = await dbConnection.query(`
-        SELECT 
-          query, 
-          calls, 
-          total_exec_time, 
-          min_exec_time,
-          max_exec_time,
-          mean_exec_time
-        FROM 
-          pg_stat_statements 
-        WHERE 
-          query NOT LIKE '%pg_stat_statements%'
-        ORDER BY 
-          total_exec_time DESC 
-        LIMIT 100
-      `);
-      
-      // Process and store queries
-      let processedCount = 0;
-      const now = new Date();
-      
-      for (const row of queriesResult.rows) {
-        const queryText = row.query;
+      try {
+        // Check if pg_stat_statements extension is available
+        const extensionResult = await dbConnection.query(
+          "SELECT * FROM pg_extension WHERE extname = 'pg_stat_statements'"
+        );
         
-        // Use the query normalization utility
-        const { normalizedQuery: normalizedText, normalizedHash } = normalizeAndHashQuery(queryText);
-        const queryHash = crypto.createHash('md5').update(queryText).digest('hex');
-        
-        // Check if this normalized query already exists
-        let normalizedQueryId;
-        const existingNormalized = await db.query.normalizedQueries.findFirst({
-          where: and(
-            eq(normalizedQueries.normalizedHash, normalizedHash),
-            eq(normalizedQueries.databaseId, databaseId)
-          )
-        });
-        
-        if (existingNormalized) {
-          // Update the last seen timestamp
-          normalizedQueryId = existingNormalized.id;
-          await db.update(normalizedQueries)
-            .set({
-              lastSeenAt: now,
-              updatedAt: now
-            })
-            .where(eq(normalizedQueries.id, normalizedQueryId));
-        } else {
-          // Create a new normalized query record
-          const [newNormalized] = await db.insert(normalizedQueries)
-            .values({
-              databaseId,
-              normalizedText,
-              normalizedHash,
-              firstSeenAt: now,
-              lastSeenAt: now,
-              isKnown: false,
-              groupId: null,
-              createdAt: now,
-              updatedAt: now
-            })
-            .returning();
-          
-          normalizedQueryId = newNormalized.id;
+        if (extensionResult.rows.length === 0) {
+          await cleanup();
+          return res.status(400).json({ 
+            error: 'pg_stat_statements extension is not installed',
+            message: 'Please install pg_stat_statements extension in your database'
+          });
         }
         
-        // Check if this exact query was already collected (by query hash)
-        const existingCollected = await db.query.collectedQueries.findFirst({
-          where: and(
-            eq(collectedQueries.queryHash, queryHash),
-            eq(collectedQueries.databaseId, databaseId)
-          )
-        });
+        // Get queries from pg_stat_statements
+        const queriesResult = await dbConnection.query(`
+          SELECT 
+            query, 
+            calls, 
+            total_exec_time, 
+            min_exec_time,
+            max_exec_time,
+            mean_exec_time
+          FROM 
+            pg_stat_statements 
+          WHERE 
+            query NOT LIKE '%pg_stat_statements%'
+          ORDER BY 
+            total_exec_time DESC 
+          LIMIT 100
+        `);
+
+        // Process and store queries
+        let processedCount = 0;
+        const now = new Date();
         
-        if (existingCollected) {
-          // Update the existing collected query with new stats
-          await db.update(collectedQueries)
-            .set({
-              calls: row.calls,
-              totalTime: row.total_exec_time,
-              minTime: row.min_exec_time,
-              maxTime: row.max_exec_time,
-              meanTime: row.mean_exec_time,
-              lastUpdatedAt: now
-            })
-            .where(eq(collectedQueries.id, existingCollected.id));
-        } else {
-          // Store a new collected query
-          await db.insert(collectedQueries)
-            .values({
-              normalizedQueryId,
+        for (const row of queriesResult.rows) {
+          const queryText = row.query;
+          
+          // Use the query normalization utility
+          const { normalizedQuery: normalizedText, normalizedHash } = normalizeAndHashQuery(queryText);
+          const queryHash = crypto.createHash('md5').update(queryText).digest('hex');
+          
+          // Check if this normalized query already exists
+          let normalizedQueryId;
+          const existingNormalized = await db.query.normalizedQueries.findFirst({
+            where: and(
+              eq(normalizedQueries.normalizedHash, normalizedHash),
+              eq(normalizedQueries.databaseId, databaseId)
+            )
+          });
+          
+          if (existingNormalized) {
+            // Update the last seen timestamp
+            normalizedQueryId = existingNormalized.id;
+            await db.update(normalizedQueries)
+              .set({
+                lastSeenAt: now,
+                updatedAt: now
+              })
+              .where(eq(normalizedQueries.id, normalizedQueryId));
+          } else {
+            // Create a new normalized query record
+            const [newNormalized] = await db.insert(normalizedQueries)
+              .values({
+                databaseId,
+                normalizedText,
+                normalizedHash,
+                firstSeenAt: now,
+                lastSeenAt: now,
+                isKnown: false,
+                groupId: null,
+                distinctQueryCount: 0,
+                instanceCount: 0,
+                createdAt: now,
+                updatedAt: now
+              })
+              .returning();
+            
+            normalizedQueryId = newNormalized.id;
+          }
+          
+          // Check if this exact query was already collected (by query hash)
+          const existingCollected = await db.query.collectedQueries.findFirst({
+            where: and(
+              eq(collectedQueries.queryHash, queryHash),
+              eq(collectedQueries.databaseId, databaseId)
+            )
+          });
+          
+          if (existingCollected) {
+            // Update the existing collected query with new stats
+            await db.update(collectedQueries)
+              .set({
+                calls: row.calls,
+                totalTime: row.total_exec_time,
+                minTime: row.min_exec_time,
+                maxTime: row.max_exec_time,
+                meanTime: row.mean_exec_time,
+                lastUpdatedAt: now
+              })
+              .where(eq(collectedQueries.id, existingCollected.id));
+          } else {
+            // Store a new collected query
+            const insertData = insertCollectedQuerySchema.parse({
+              normalizedQueryId: normalizedQueryId,
               databaseId,
               queryText,
               queryHash,
@@ -239,16 +263,23 @@ router.post('/:id/query-monitoring/start', async (req, res) => {
               collectedAt: now,
               lastUpdatedAt: now
             });
-          
-          processedCount++;
+            
+            await db.insert(collectedQueries).values(insertData);
+            
+            processedCount++;
+          }
         }
+        
+        await cleanup();
+        return res.json({ 
+          success: true, 
+          processedQueries: queriesResult.rows.length,
+          newQueries: processedCount
+        });
+      } catch (error) {
+        await cleanup();
+        throw error;
       }
-      
-      return res.json({ 
-        success: true, 
-        processedQueries: queriesResult.rows.length,
-        newQueries: processedCount
-      });
     } catch (error) {
       console.error(`Error accessing database ${databaseId}:`, error);
       return res.status(500).json({ 
@@ -466,7 +497,7 @@ router.patch('/:id/discovered-queries', async (req, res) => {
       return res.status(400).json({ error: 'Missing queryId parameter' });
     }
     
-    const updateData = {
+    const updateData: Partial<typeof normalizedQueries.$inferInsert> = {
       updatedAt: new Date()
     };
     
@@ -503,6 +534,81 @@ router.get('/:id/metrics', requireAuth, async (req, res) => {
 
 router.post('/:id/kill-query', requireAuth, async (req, res) => {
   // Implementation from routes.ts
+});
+
+// Save query sample
+router.post('/:id/query-samples', robustAuth, async (req, res) => {
+  try {
+    const databaseId = parseInt(req.params.id);
+    const { queryText, username, applicationName, clientAddr, queryStart, duration } = req.body;
+
+    // Validate required fields
+    if (!queryText || !username || !applicationName || !clientAddr || !queryStart || !duration) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Normalize and hash the query
+    const { normalizedQuery: normalizedText, normalizedHash } = normalizeAndHashQuery(queryText);
+    const queryHash = crypto.createHash('md5').update(queryText).digest('hex');
+
+    // Find or create normalized query
+    let normalizedQueryId;
+    const existingNormalizedQuery = await db.query.normalizedQueries.findFirst({
+      where: eq(normalizedQueries.normalizedHash, normalizedHash)
+    });
+
+    if (existingNormalizedQuery) {
+      normalizedQueryId = existingNormalizedQuery.id;
+    } else {
+      const [newNormalizedQuery] = await db.insert(normalizedQueries)
+        .values({
+          databaseId,
+          normalizedText,
+          normalizedHash,
+          isKnown: false,
+          firstSeenAt: new Date(),
+          lastSeenAt: new Date(),
+          createdAt: new Date(),
+          updatedAt: new Date()
+        })
+        .returning();
+      normalizedQueryId = newNormalizedQuery.id;
+    }
+
+    // Insert query sample
+    const [querySample] = await db.insert(querySamples)
+      .values({
+        normalizedQueryId,
+        databaseId,
+        queryText,
+        queryHash,
+        username,
+        applicationName,
+        clientAddr,
+        queryStart: new Date(queryStart),
+        duration: duration.toString(),
+        createdAt: new Date(),
+        updatedAt: new Date()
+      })
+      .returning();
+
+    // Log the operation
+    await db.insert(databaseOperationLogs).values({
+      databaseId,
+      userId: req.user?.id,
+      operationType: 'SAVE_QUERY_SAMPLE',
+      operationResult: 'success',
+      details: {
+        querySampleId: querySample.id,
+        normalizedQueryId
+      }
+    });
+
+    res.json(querySample);
+  } catch (error) {
+    console.error('Error in saveQuerySample:', error);
+    res.status(500).json({ error: 'Failed to save query sample' });
+  }
 });
 
 export default router; 

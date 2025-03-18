@@ -3314,7 +3314,7 @@ export function registerRoutes(app: Express): Server {
           nq.group_id as "groupId",
           nq.first_seen_at as "firstSeenAt",
           nq.last_seen_at as "lastSeenAt",
-          COUNT(cq.id) as "instanceCount",
+          nq.instance_count as "instanceCount",
           SUM(cq.calls) as "callCount",
           SUM(cq.total_time) as "totalTime",
           MIN(cq.min_time) as "minTime",

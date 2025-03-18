@@ -346,24 +346,7 @@ exports.queryGroups = (0, pg_core_1.pgTable)("query_groups", {
     createdAt: (0, pg_core_1.timestamp)("created_at").notNull().defaultNow(),
     updatedAt: (0, pg_core_1.timestamp)("updated_at").notNull().defaultNow(),
 });
-exports.discoveredQueries = (0, pg_core_1.pgTable)("discovered_queries", {
-    id: (0, pg_core_1.serial)("id").primaryKey(),
-    databaseId: (0, pg_core_1.integer)("database_id").notNull().references(function () { return exports.databaseConnections.id; }, { onDelete: 'cascade' }),
-    queryText: (0, pg_core_1.text)("query_text").notNull(),
-    queryHash: (0, pg_core_1.text)("query_hash").notNull(),
-    normalizedQuery: (0, pg_core_1.text)("normalized_query"),
-    firstSeenAt: (0, pg_core_1.timestamp)("first_seen_at").notNull().defaultNow(),
-    lastSeenAt: (0, pg_core_1.timestamp)("last_seen_at").notNull().defaultNow(),
-    callCount: (0, pg_core_1.integer)("call_count").notNull().default(1),
-    totalTime: (0, pg_core_1.numeric)("total_time").notNull().default('0'),
-    minTime: (0, pg_core_1.numeric)("min_time"),
-    maxTime: (0, pg_core_1.numeric)("max_time"),
-    meanTime: (0, pg_core_1.numeric)("mean_time"),
-    isKnown: (0, pg_core_1.boolean)("is_known").notNull().default(false),
-    groupId: (0, pg_core_1.integer)("group_id").references(function () { return exports.queryGroups.id; }),
-    createdAt: (0, pg_core_1.timestamp)("created_at").notNull().defaultNow(),
-    updatedAt: (0, pg_core_1.timestamp)("updated_at").notNull().defaultNow(),
-});
+
 // Add query monitoring relations after line 408 (at the end of the file)
 // Relations for query monitoring tables
 exports.queryMonitoringConfigRelations = (0, drizzle_orm_1.relations)(exports.queryMonitoringConfigs, function (_a) {

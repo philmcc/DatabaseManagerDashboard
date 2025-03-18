@@ -1,4 +1,5 @@
 import { pgTable, text, serial, timestamp, integer, boolean, primaryKey, jsonb, numeric, json, pgEnum } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { relations } from "drizzle-orm";
 
@@ -385,32 +386,11 @@ export const queryGroups = pgTable("query_groups", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
-export const discoveredQueries = pgTable("discovered_queries", {
-  id: serial("id").primaryKey(),
-  databaseId: integer("database_id").notNull().references(() => databaseConnections.id, { onDelete: 'cascade' }),
-  queryText: text("query_text").notNull(),
-  queryHash: text("query_hash").notNull(),
-  normalizedQuery: text("normalized_query"),
-  firstSeenAt: timestamp("first_seen_at").notNull().defaultNow(),
-  lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
-  callCount: integer("call_count").notNull().default(1),
-  totalTime: numeric("total_time").notNull().default('0'),
-  minTime: numeric("min_time"),
-  maxTime: numeric("max_time"),
-  meanTime: numeric("mean_time"),
-  isKnown: boolean("is_known").notNull().default(false),
-  groupId: integer("group_id").references(() => queryGroups.id),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
-
 export type SelectQueryMonitoringConfig = typeof queryMonitoringConfigs.$inferSelect;
 export type SelectQueryGroup = typeof queryGroups.$inferSelect;
-export type SelectDiscoveredQuery = typeof discoveredQueries.$inferSelect;
 
-// Add query monitoring relations after line 408 (at the end of the file)
 // Relations for query monitoring tables
-export const queryMonitoringConfigRelations = relations(queryMonitoringConfigs, ({ one, many }) => ({
+export const queryMonitoringConfigRelations = relations(queryMonitoringConfigs, ({ one }) => ({
   database: one(databaseConnections, {
     fields: [queryMonitoringConfigs.databaseId],
     references: [databaseConnections.id],
@@ -421,7 +401,7 @@ export const queryMonitoringConfigRelations = relations(queryMonitoringConfigs, 
   }),
 }));
 
-export const queryGroupRelations = relations(queryGroups, ({ one, many }) => ({
+export const queryGroupRelations = relations(queryGroups, ({ one }) => ({
   database: one(databaseConnections, {
     fields: [queryGroups.databaseId],
     references: [databaseConnections.id],
@@ -430,18 +410,6 @@ export const queryGroupRelations = relations(queryGroups, ({ one, many }) => ({
     fields: [queryGroups.userId],
     references: [users.id],
   }),
-  queries: many(discoveredQueries),
-}));
-
-export const discoveredQueryRelations = relations(discoveredQueries, ({ one }) => ({
-  database: one(databaseConnections, {
-    fields: [discoveredQueries.databaseId],
-    references: [databaseConnections.id],
-  }),
-  group: one(queryGroups, {
-    fields: [discoveredQueries.groupId],
-    references: [queryGroups.id],
-  }),
 }));
 
 // Create schemas for query monitoring tables
@@ -449,13 +417,10 @@ export const insertQueryMonitoringConfigSchema = createInsertSchema(queryMonitor
 export const selectQueryMonitoringConfigSchema = createSelectSchema(queryMonitoringConfigs);
 export const insertQueryGroupSchema = createInsertSchema(queryGroups);
 export const selectQueryGroupSchema = createSelectSchema(queryGroups);
-export const insertDiscoveredQuerySchema = createInsertSchema(discoveredQueries);
-export const selectDiscoveredQuerySchema = createSelectSchema(discoveredQueries);
 
 // Define types for query monitoring tables
 export type InsertQueryMonitoringConfig = typeof queryMonitoringConfigs.$inferInsert;
 export type InsertQueryGroup = typeof queryGroups.$inferInsert;
-export type InsertDiscoveredQuery = typeof discoveredQueries.$inferInsert;
 
 // New improved query monitoring tables
 export const normalizedQueries = pgTable("normalized_queries", {
@@ -467,6 +432,8 @@ export const normalizedQueries = pgTable("normalized_queries", {
   lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
   isKnown: boolean("is_known").notNull().default(false),
   groupId: integer("group_id").references(() => queryGroups.id),
+  distinctQueryCount: integer("distinct_query_count").notNull().default(0),
+  instanceCount: integer("instance_count").notNull().default(0),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -485,3 +452,36 @@ export const collectedQueries = pgTable("collected_queries", {
   collectedAt: timestamp("collected_at").notNull().defaultNow(),
   lastUpdatedAt: timestamp("last_updated_at").notNull().defaultNow(),
 });
+
+// SQL to create trigger function for maintaining distinctQueryCount and instanceCount
+export const updateDistinctQueryCountFunction = sql`
+CREATE OR REPLACE FUNCTION update_distinct_query_count()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- Update both counts in normalized_queries
+  UPDATE normalized_queries
+  SET 
+    distinct_query_count = (
+      SELECT COUNT(DISTINCT query_hash)
+      FROM collected_queries
+      WHERE normalized_query_id = COALESCE(NEW.normalized_query_id, OLD.normalized_query_id)
+    ),
+    instance_count = (
+      SELECT COUNT(*)
+      FROM collected_queries
+      WHERE normalized_query_id = COALESCE(NEW.normalized_query_id, OLD.normalized_query_id)
+    )
+  WHERE id = COALESCE(NEW.normalized_query_id, OLD.normalized_query_id);
+  
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+`;
+
+// SQL to create the trigger
+export const createDistinctQueryCountTrigger = sql`
+CREATE TRIGGER maintain_distinct_query_count
+AFTER INSERT OR UPDATE OR DELETE ON collected_queries
+FOR EACH ROW
+EXECUTE FUNCTION update_distinct_query_count();
+`;

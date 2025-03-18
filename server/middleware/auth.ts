@@ -1,6 +1,17 @@
 import { Request, Response, NextFunction } from 'express';
-import { logger } from '../utils/logger';
-import { rateLimitLog } from '../utils/log-limiter';
+import { logger } from '../utils/logger.js';
+import { rateLimitLog } from '../utils/log-limiter.js';
+
+// Extend Express.User type
+declare global {
+  namespace Express {
+    interface User {
+      id: number;
+      username: string;
+      role: string;
+    }
+  }
+}
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!req.isAuthenticated()) {
@@ -11,7 +22,8 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
     
     return res.status(401).json({
       success: false,
-      message: 'Authentication required'
+      message: 'Authentication required',
+      redirect: '/auth'
     });
   }
   
@@ -19,20 +31,23 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
 }
 
 export function requireAdmin(req: Request, res: Response, next: NextFunction) {
-  if (req.isAuthenticated() && req.user && req.user.role === 'ADMIN') {
-    return next();
+  if (!req.isAuthenticated()) {
+    return res.status(401).json({
+      success: false,
+      message: 'Authentication required',
+      redirect: '/auth'
+    });
   }
   
-  if (req.isAuthenticated() && req.user) {
-    logger.warn(`Unauthorized admin access attempt by ${req.user.username}`);
-  } else {
-    logger.info(`Admin access denied (not authenticated)`);
+  if (req.user.role !== 'ADMIN') {
+    return res.status(403).json({
+      success: false,
+      message: 'Admin access required',
+      redirect: '/dashboard'
+    });
   }
   
-  return res.status(403).json({
-    success: false,
-    message: 'Admin access required'
-  });
+  next();
 }
 
 export function requireWriter(req: Request, res: Response, next: NextFunction) {

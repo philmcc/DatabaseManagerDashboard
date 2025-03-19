@@ -438,6 +438,21 @@ export const normalizedQueries = pgTable("normalized_queries", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+export const querySamples = pgTable("query_samples", {
+  id: serial("id").primaryKey(),
+  normalizedQueryId: integer("normalized_query_id").notNull().references(() => normalizedQueries.id, { onDelete: 'cascade' }),
+  databaseId: integer("database_id").notNull().references(() => databaseConnections.id, { onDelete: 'cascade' }),
+  queryText: text("query_text").notNull(),
+  queryHash: text("query_hash").notNull(),
+  username: text("username"),
+  applicationName: text("application_name"),
+  clientAddr: text("client_addr"),
+  queryStart: timestamp("query_start"),
+  duration: text("duration"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
 export const collectedQueries = pgTable("collected_queries", {
   id: serial("id").primaryKey(),
   normalizedQueryId: integer("normalized_query_id").notNull().references(() => normalizedQueries.id, { onDelete: 'cascade' }),
@@ -452,6 +467,22 @@ export const collectedQueries = pgTable("collected_queries", {
   collectedAt: timestamp("collected_at").notNull().defaultNow(),
   lastUpdatedAt: timestamp("last_updated_at").notNull().defaultNow(),
 });
+
+// Create schemas for the new table
+export const insertQuerySampleSchema = createInsertSchema(querySamples);
+export const selectQuerySampleSchema = createSelectSchema(querySamples);
+
+// Define relations
+export const querySampleRelations = relations(querySamples, ({ one }) => ({
+  normalizedQuery: one(normalizedQueries, {
+    fields: [querySamples.normalizedQueryId],
+    references: [normalizedQueries.id],
+  }),
+  database: one(databaseConnections, {
+    fields: [querySamples.databaseId],
+    references: [databaseConnections.id],
+  }),
+}));
 
 // SQL to create trigger function for maintaining distinctQueryCount and instanceCount
 export const updateDistinctQueryCountFunction = sql`

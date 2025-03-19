@@ -8,12 +8,20 @@ import { logger } from './utils/logger.js';
 import { db } from "../db/index.js";
 import { normalizedQueries } from "../db/schema.js";
 import { eq } from "drizzle-orm";
+import databaseRoutes from './routes/api/databases.js';
+import { setupAuth } from './auth.js';
 
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
+// Set up authentication before routes
+setupAuth(app);
+
 app.use(requestLogger);
+
+// Mount API routes
+app.use('/api/databases', databaseRoutes);
 
 // Add explicit route for marking queries as known/unknown
 // This needs to be before any catch-all routes

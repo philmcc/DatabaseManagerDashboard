@@ -3,7 +3,7 @@ import { Link, useParams } from "wouter";
 import BaseLayout from "@/components/layout/base-layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Database, Activity, Server, Clock, RefreshCw, XCircle } from "lucide-react";
+import { Database, Activity, Server, Clock, RefreshCw, XCircle, Save } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { SelectDatabaseConnection, SelectDatabaseOperationLog } from "@db/schema";
@@ -61,6 +61,14 @@ interface RunningQuery {
 const durationToSeconds = (duration: string): number => {
   // Duration comes in format "123.456s"
   return parseFloat(duration.replace('s', ''));
+};
+
+// Helper function to calculate and format query duration
+const formatQueryDuration = (queryStart: string): string => {
+  const start = new Date(queryStart);
+  const now = new Date();
+  const durationMs = now.getTime() - start.getTime();
+  return `${(durationMs / 1000).toFixed(3)}s`;
 };
 
 // Helper function to extract a normalized signature from a query text.
@@ -313,6 +321,83 @@ export default function DatabaseDetails() {
     },
   });
 
+  const { mutate: saveQuerySample } = useMutation({
+    mutationFn: async ({ query }: { query: RunningQuery }) => {
+      console.log('Attempting to save query sample:', {
+        databaseId: id,
+        query: {
+          text: query.query,
+          username: query.usename,
+          applicationName: query.application_name,
+          clientAddr: query.client_addr,
+          queryStart: query.query_start,
+          duration: formatQueryDuration(query.query_start)
+        }
+      });
+
+      try {
+        const response = await fetch(`/api/databases/${id}/query-samples`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            queryText: query.query,
+            username: query.usename,
+            applicationName: query.application_name,
+            clientAddr: query.client_addr,
+            queryStart: query.query_start,
+            duration: formatQueryDuration(query.query_start)
+          }),
+        });
+
+        console.log('Save query sample response:', {
+          status: response.status,
+          statusText: response.statusText,
+          headers: Object.fromEntries(response.headers.entries())
+        });
+
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          console.error('Non-JSON response:', await response.text());
+          throw new Error('Server returned non-JSON response');
+        }
+
+        const data = await response.json();
+        console.log('Save query sample response data:', data);
+        
+        if (!response.ok) {
+          throw new Error(data.message || 'Failed to save query sample');
+        }
+
+        return data;
+      } catch (error) {
+        console.error('Error in saveQuerySample:', error);
+        if (error instanceof Error) {
+          throw error;
+        }
+        throw new Error('Failed to save query sample');
+      }
+    },
+    onSuccess: () => {
+      console.log('Query sample saved successfully');
+      queryClient.invalidateQueries({ 
+        predicate: (query) => query.queryKey[0].toString().includes('/api/database-logs')
+      });
+      toast({
+        title: "Success",
+        description: "Query sample saved successfully",
+      });
+    },
+    onError: (error: Error) => {
+      console.error('Error saving query sample:', error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message || 'Failed to save query sample',
+      });
+    },
+  });
+
   const handleRefreshQueries = async () => {
     try {
       await queryClient.invalidateQueries({
@@ -448,20 +533,6 @@ export default function DatabaseDetails() {
 
     return () => clearInterval(intervalId);
   }, [isContinuousKilling, continuousKillSignature, queryClient, id]);
-
-  // Format the duration since query start
-  const formatQueryDuration = (queryStart: string) => {
-    try {
-      const start = new Date(queryStart);
-      if (isNaN(start.getTime())) {
-        return 'Invalid date';
-      }
-      return formatDistanceToNow(start, { addSuffix: true });
-    } catch (error) {
-      console.error('Error formatting date:', error);
-      return 'Invalid date';
-    }
-  };
 
   if (isLoadingDatabase) {
     return (
@@ -751,13 +822,24 @@ export default function DatabaseDetails() {
                                 <code className="text-sm">{query.query}</code>
                               </TableCell>
                               <TableCell>
-                                <Button
-                                  variant="destructive"
-                                  size="sm"
-                                  onClick={() => killQuery({ pid: query.pid })}
-                                >
-                                  Kill
-                                </Button>
+                                <div className="flex gap-2">
+                                  <Button
+                                    variant="destructive"
+                                    size="sm"
+                                    onClick={() => killQuery({ pid: query.pid })}
+                                  >
+                                    Kill
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => saveQuerySample({ query })}
+                                    className="flex items-center gap-1"
+                                  >
+                                    <Save className="h-3 w-3" />
+                                    Save Sample
+                                  </Button>
+                                </div>
                               </TableCell>
                             </TableRow>
                           ))}

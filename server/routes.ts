@@ -3302,8 +3302,8 @@ export function registerRoutes(app: Express): Server {
         groupIdParam,
         showKnown
       });
-      
-      // Now use a dynamic SQL query with the new schema
+
+      // Build the base query
       let queryStr = `
         SELECT 
           nq.id,
@@ -3314,7 +3314,7 @@ export function registerRoutes(app: Express): Server {
           nq.group_id as "groupId",
           nq.first_seen_at as "firstSeenAt",
           nq.last_seen_at as "lastSeenAt",
-          nq.instance_count as "instanceCount",
+          COUNT(cq.id) as "instanceCount",
           SUM(cq.calls) as "callCount",
           SUM(cq.total_time) as "totalTime",
           MIN(cq.min_time) as "minTime",
@@ -3338,52 +3338,74 @@ export function registerRoutes(app: Express): Server {
         WHERE 
           nq.database_id = $1
       `;
-      
-      // Build the dynamic WHERE clause
-      const params: any[] = [databaseId];
-      
+
+      const params = [databaseId];
+      let paramIndex = 2;
+
+      // Add filters
+      const conditions = [];
+
+      // Filter by known status
       if (!showKnown) {
-        queryStr += ` AND nq.is_known = false`;
+        conditions.push(`nq.is_known = $${paramIndex}`);
+        params.push(false);
+        paramIndex++;
       }
-      
-      // Add group filtering
+
+      // Filter by group
       if (groupIdParam === 'ungrouped') {
-        queryStr += ` AND nq.group_id IS NULL`;
+        conditions.push(`nq.group_id IS NULL`);
       } else if (groupIdParam && groupIdParam !== 'all_queries') {
-        queryStr += ` AND nq.group_id = $${params.length + 1}`;
+        conditions.push(`nq.group_id = $${paramIndex}`);
         params.push(parseInt(groupIdParam));
+        paramIndex++;
       }
-      
-      // Add date range filtering
+
+      // Add date filters
       if (startDate) {
-        queryStr += ` AND nq.last_seen_at >= $${params.length + 1}`;
+        conditions.push(`nq.last_seen_at >= $${paramIndex}`);
         params.push(startDate);
+        paramIndex++;
       }
-      
+
       if (endDate) {
-        queryStr += ` AND nq.last_seen_at <= $${params.length + 1}`;
+        conditions.push(`nq.last_seen_at <= $${paramIndex}`);
         params.push(endDate);
+        paramIndex++;
       }
-      
+
       // Add search filter
-      if (search && search.trim()) {
-        // We search in the most recent query text for this normalized query
-        queryStr += ` AND EXISTS (
+      if (search) {
+        const searchPattern = `%${search.replace(/%/g, '\\%').replace(/_/g, '\\_')}%`;
+        conditions.push(`(nq.normalized_text ILIKE $${paramIndex} OR EXISTS (
           SELECT 1 FROM collected_queries cq_search 
           WHERE cq_search.normalized_query_id = nq.id 
-          AND cq_search.query_text ILIKE $${params.length + 1}
-        )`;
-        params.push(`%${search.trim()}%`);
+          AND cq_search.query_text ILIKE $${paramIndex}
+        ))`);
+        params.push(searchPattern);
+        paramIndex++;
       }
-      
-      // Add group by and order by clauses
+
+      // Add conditions to query
+      if (conditions.length > 0) {
+        queryStr += ` AND ${conditions.join(' AND ')}`;
+      }
+
+      // Add group by and order by
       queryStr += `
         GROUP BY 
-          nq.id, nq.database_id, nq.normalized_text, nq.normalized_hash, 
-          nq.is_known, nq.group_id, nq.first_seen_at, nq.last_seen_at
-        ORDER BY nq.first_seen_at DESC
+          nq.id, 
+          nq.database_id,
+          nq.normalized_text,
+          nq.normalized_hash,
+          nq.is_known,
+          nq.group_id,
+          nq.first_seen_at,
+          nq.last_seen_at
+        ORDER BY MAX(cq.last_updated_at) DESC
+        LIMIT 100
       `;
-      
+
       // Execute the query
       try {
         // Use the pg Pool directly since db.execute has issues
@@ -3392,37 +3414,92 @@ export function registerRoutes(app: Express): Server {
         });
         
         try {
+          console.log('Executing query:', queryStr);
+          console.log('With parameters:', params);
+          
           const result = await pool.query(queryStr, params);
           const queries = result.rows;
           
           console.log(`Found ${queries.length} queries matching the criteria`);
           
           // Additional debugging
-          if (queries.length === 0 && !showKnown) {
-            console.log('No queries found with isKnown=false. Checking query validity...');
+          if (queries.length === 0) {
+            console.log('No queries found. Checking query validity...');
             
-            // Check if we have any queries without time filters
-            const checkResult = await pool.query(
-              "SELECT COUNT(*) as count FROM normalized_queries WHERE database_id = $1 AND is_known = false",
-              [databaseId]
-            );
-            const count = parseInt(checkResult.rows[0].count);
+            // Try a simpler query to check if the database has any queries at all
+            const basicQuery = `
+              SELECT * FROM normalized_queries 
+              WHERE database_id = $1
+              ${!showKnown ? ' AND is_known = false' : ''}
+              LIMIT 5
+            `;
             
-            if (count > 0) {
-              console.log(`Found ${count} queries when only filtering by isKnown=false. Something may be wrong with other filters.`);
+            console.log('Running basic query:', basicQuery);
+            const basicResult = await pool.query(basicQuery, [databaseId]);
+            console.log(`Basic query found ${basicResult.rows.length} results`);
+            
+            if (basicResult.rows.length > 0) {
+              console.log('Basic query results:', basicResult.rows);
               
-              // Get a sample query
-              const sampleResult = await pool.query(
-                "SELECT * FROM normalized_queries WHERE database_id = $1 AND is_known = false LIMIT 1",
-                [databaseId]
-              );
-              console.log('Sample query:', sampleResult.rows[0]);
-            } else {
-              console.log('No queries found with isKnown=false at all. Check database data.');
+              // If basic query returns results but main query doesn't, try a simplified version
+              // of the main query without the complex joins and aggregations
+              const simplifiedQuery = `
+                SELECT 
+                  nq.id,
+                  nq.database_id as "databaseId",
+                  nq.normalized_text as "normalizedText",
+                  nq.normalized_hash as "normalizedHash",
+                  nq.is_known as "isKnown",
+                  nq.group_id as "groupId",
+                  nq.first_seen_at as "firstSeenAt",
+                  nq.last_seen_at as "lastSeenAt",
+                  NULL as "queryText"
+                FROM 
+                  normalized_queries nq
+                WHERE 
+                  nq.database_id = $1
+                  ${!showKnown ? ' AND nq.is_known = false' : ''}
+                ORDER BY
+                  nq.last_seen_at DESC
+                LIMIT 20
+              `;
+              
+              console.log('Running simplified query:', simplifiedQuery);
+              const simplifiedResult = await pool.query(simplifiedQuery, [databaseId]);
+              
+              if (simplifiedResult.rows.length > 0) {
+                console.log(`Simplified query found ${simplifiedResult.rows.length} results`);
+                return res.json(simplifiedResult.rows);
+              }
             }
           }
           
+          // Add a safeguard for null query texts
+          queries.forEach(query => {
+            if (!query.queryText) {
+              query.queryText = "Query text not available";
+            }
+          });
+          
           return res.json(queries);
+        } catch (error) {
+          console.error('SQL Error details:', error);
+          console.error('Query that caused error:', queryStr);
+          console.error('Parameters:', params);
+          
+          // Try a very basic query to check database connectivity
+          try {
+            const testResult = await pool.query('SELECT 1 as test');
+            console.log('Database connection test successful:', testResult.rows);
+          } catch (connError) {
+            console.error('Database connection error:', connError);
+          }
+          
+          return res.status(500).json({ 
+            error: 'Failed to fetch discovered queries',
+            message: error instanceof Error ? error.message : 'Unknown error',
+            detail: error instanceof Error ? error.stack : undefined
+          });
         } finally {
           await pool.end();
         }

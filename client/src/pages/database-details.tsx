@@ -26,6 +26,13 @@ import {
 import QueryMonitoringCard from "@/components/database/QueryMonitoringCard";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface LogDetails {
   before?: Record<string, any>;
@@ -95,6 +102,7 @@ export default function DatabaseDetails() {
   const [continuousKillStartTime, setContinuousKillStartTime] = useState<string | null>(null);
   const [autoRefreshQueries, setAutoRefreshQueries] = useState(false);
   const [autoStoreQueries, setAutoStoreQueries] = useState(false);
+  const [pollingInterval, setPollingInterval] = useState(5000); // Default 5 seconds
 
   const { data: database, isLoading: isLoadingDatabase } = useQuery<SelectDatabaseConnection & {
     instance: {
@@ -113,7 +121,7 @@ export default function DatabaseDetails() {
 
   const { data: runningQueries = [], isLoading: isLoadingQueries } = useQuery<RunningQuery[]>({
     queryKey: [`/api/databases/${id}/running-queries`],
-    refetchInterval: autoRefreshQueries ? 5000 : undefined,
+    refetchInterval: autoRefreshQueries ? pollingInterval : undefined,
   });
 
   const logs = logsData?.logs || [];
@@ -778,8 +786,26 @@ export default function DatabaseDetails() {
                           onCheckedChange={setAutoRefreshQueries}
                         />
                         <Label htmlFor="auto-refresh-queries">
-                          Auto-refresh queries {autoRefreshQueries ? '(every 5s)' : '(off)'}
+                          Auto-refresh queries {autoRefreshQueries ? `(every ${pollingInterval/1000}s)` : '(off)'}
                         </Label>
+                        {autoRefreshQueries && (
+                          <Select
+                            value={pollingInterval.toString()}
+                            onValueChange={(value) => setPollingInterval(parseInt(value))}
+                          >
+                            <SelectTrigger className="w-[140px] h-8 ml-2">
+                              <SelectValue placeholder="Refresh rate" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="1000">Every 1s</SelectItem>
+                              <SelectItem value="2000">Every 2s</SelectItem>
+                              <SelectItem value="5000">Every 5s</SelectItem>
+                              <SelectItem value="10000">Every 10s</SelectItem>
+                              <SelectItem value="30000">Every 30s</SelectItem>
+                              <SelectItem value="60000">Every 1m</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        )}
                       </div>
                       
                       <div className="flex items-center gap-2 ml-4">

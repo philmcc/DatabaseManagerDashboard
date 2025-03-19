@@ -516,3 +516,21 @@ AFTER INSERT OR UPDATE OR DELETE ON collected_queries
 FOR EACH ROW
 EXECUTE FUNCTION update_distinct_query_count();
 `;
+
+export const discoveredQueries = pgTable("discovered_queries", {
+  id: serial("id").primaryKey(),
+  databaseId: integer("database_id").notNull().references(() => databaseConnections.id, { onDelete: 'cascade' }),
+  queryText: text("query_text").notNull(),
+  queryHash: text("query_hash").notNull(),
+  normalizedQuery: text("normalized_query"),
+  firstSeenAt: timestamp("first_seen_at").notNull().defaultNow(),
+  lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
+  callCount: integer("call_count").notNull().default(1),
+  totalTime: numeric("total_time").notNull().default("0"),
+  minTime: numeric("min_time"),
+  maxTime: numeric("max_time"),
+  isKnown: boolean("is_known").notNull().default(false),
+  groupId: integer("group_id").references(() => queryGroups.id),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow()
+});

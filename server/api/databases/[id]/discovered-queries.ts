@@ -1,5 +1,5 @@
 import { db } from "@/db";
-import { normalizedQueries } from "@/db/schema";
+import { normalizedQueries, collectedQueries } from "@/db/schema";
 import { eq, and, isNull, desc, gte, lte } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
@@ -33,28 +33,26 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
       search
     });
     
-    // Build the base query
-    let whereConditions = eq(normalizedQueries.databaseId, databaseId);
+    // Build a raw SQL query instead of using Drizzle's query builder
+    let conditions = [];
+    let parameters = [databaseId]; // First parameter is databaseId
+    let parameterCounter = 1;
+    
+    // Database ID condition is always present
+    conditions.push(`nq.database_id = $${parameterCounter++}`);
     
     // Filter by known status
     if (!showKnown) {
-      whereConditions = and(
-        whereConditions,
-        eq(normalizedQueries.isKnown, false)
-      );
+      parameters.push(false);
+      conditions.push(`nq.is_known = $${parameterCounter++}`);
     }
     
     // Filter by group
     if (groupId === 'ungrouped') {
-      whereConditions = and(
-        whereConditions,
-        isNull(normalizedQueries.groupId)
-      );
+      conditions.push(`nq.group_id IS NULL`);
     } else if (groupId && groupId !== 'all_queries') {
-      whereConditions = and(
-        whereConditions,
-        eq(normalizedQueries.groupId, parseInt(groupId))
-      );
+      parameters.push(parseInt(groupId));
+      conditions.push(`nq.group_id = $${parameterCounter++}`);
     }
     
     // Filter by date range
@@ -62,13 +60,9 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
       try {
         const parsedStartDate = new Date(startDate);
         if (!isNaN(parsedStartDate.getTime())) {
-          whereConditions = and(
-            whereConditions,
-            gte(normalizedQueries.lastSeenAt, parsedStartDate)
-          );
+          parameters.push(parsedStartDate.toISOString());
+          conditions.push(`nq.last_seen_at >= $${parameterCounter++}`);
           logger.info(`Applied start date filter: ${parsedStartDate.toISOString()}`);
-        } else {
-          logger.warn(`Invalid start date format: ${startDate}`);
         }
       } catch (error) {
         logger.error(`Error parsing start date '${startDate}':`, error);
@@ -79,57 +73,82 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
       try {
         const parsedEndDate = new Date(endDate);
         if (!isNaN(parsedEndDate.getTime())) {
-          whereConditions = and(
-            whereConditions,
-            lte(normalizedQueries.lastSeenAt, parsedEndDate)
-          );
+          parameters.push(parsedEndDate.toISOString());
+          conditions.push(`nq.last_seen_at <= $${parameterCounter++}`);
           logger.info(`Applied end date filter: ${parsedEndDate.toISOString()}`);
-        } else {
-          logger.warn(`Invalid end date format: ${endDate}`);
         }
       } catch (error) {
         logger.error(`Error parsing end date '${endDate}':`, error);
       }
     }
     
-    // Search query text - add more robust search handling
+    // Search query text
     if (search && search.trim()) {
       try {
-        // Properly escape wildcards for ILIKE
         const searchPattern = `%${search.trim().replace(/%/g, '\\%').replace(/_/g, '\\_')}%`;
-        
-        // Make sure we're using the right SQL construction for text search
-        whereConditions = and(
-          whereConditions,
-          // Option 1: Using raw SQL for more control
-          sql`(${normalizedQueries.normalizedText}::text ILIKE ${searchPattern})`
-        );
-        
+        parameters.push(searchPattern);
+        conditions.push(`nq.normalized_text ILIKE $${parameterCounter++}`);
         logger.info(`Applied search filter with pattern: ${searchPattern}`);
       } catch (error) {
         logger.error(`Error applying search filter '${search}':`, error);
       }
     }
     
-    // Execute the query with all filters
-    const results = await db.select()
-      .from(normalizedQueries)
-      .where(whereConditions)
-      .orderBy(desc(normalizedQueries.lastSeenAt))
-      .limit(100);
+    // Construct the WHERE clause
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    
+    // Execute raw SQL query
+    const query = `
+      SELECT 
+        nq.id,
+        nq.database_id as "databaseId",
+        nq.normalized_text as "normalizedText",
+        nq.normalized_hash as "normalizedHash",
+        nq.first_seen_at as "firstSeenAt",
+        nq.last_seen_at as "lastSeenAt",
+        COALESCE(COUNT(cq.id), 0) as "callCount",
+        COALESCE(SUM(cq.total_time), 0) as "totalTime",
+        MIN(cq.min_time) as "minTime",
+        MAX(cq.max_time) as "maxTime",
+        CASE 
+          WHEN COUNT(cq.id) > 0 
+          THEN SUM(cq.total_time)::float / COUNT(cq.id) 
+          ELSE 0 
+        END as "meanTime",
+        nq.is_known as "isKnown",
+        nq.group_id as "groupId",
+        nq.instance_count as "instanceCount",
+        nq.distinct_query_count as "distinctQueryCount",
+        nq.updated_at as "lastUpdatedAt",
+        MAX(cq.query_text) as "queryText"
+      FROM 
+        normalized_queries nq
+      LEFT JOIN 
+        collected_queries cq ON nq.id = cq.normalized_query_id
+      ${whereClause}
+      GROUP BY 
+        nq.id
+      ORDER BY 
+        nq.last_seen_at DESC
+      LIMIT 100
+    `;
+    
+    logger.info('Executing query:', { query, parameters });
+    
+    const result = await db.execute(sql.raw(query, parameters));
+    const { rows } = result;
     
     // Log the query results
-    logger.info(`Found ${results.length} queries matching filters`);
+    logger.info(`Found ${rows.length} queries matching filters`);
     
-    // At the top of the GET function, add this to prevent browser caching
+    // Set cache control headers
     const headers = {
       'Cache-Control': 'no-cache, no-store, must-revalidate',
       'Pragma': 'no-cache',
       'Expires': '0'
     };
     
-    // And when returning the response:
-    return new Response(JSON.stringify(results), {
+    return new Response(JSON.stringify(rows), {
       headers: {
         'Content-Type': 'application/json',
         ...headers
@@ -146,63 +165,17 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
 
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
   try {
-    logger.info('PATCH request received for discovered-queries', { 
-      databaseId: params.id,
-      url: req.url,
-      method: req.method
-    });
-    
-    // Log headers for debugging
-    const headersObj: Record<string, string> = {};
-    req.headers.forEach((value, key) => {
-      headersObj[key] = value;
-    });
-    logger.info('Request headers:', headersObj);
-    
     const auth = await getAuth();
     if (!auth) {
-      logger.warn('Unauthorized attempt to update discovered query');
-      return new Response(
-        JSON.stringify({ error: "Unauthorized" }), 
-        { 
-          status: 401,
-          headers: { 'Content-Type': 'application/json' }
-        }
-      );
+      return new Response("Unauthorized", { status: 401 });
     }
 
-    let requestBody;
-    let rawBody = '';
-    try {
-      // Clone the request to get the raw body as text first
-      const clonedReq = req.clone();
-      rawBody = await clonedReq.text();
-      logger.info('Raw request body:', rawBody);
-      
-      // Now parse the original request as JSON
-      requestBody = await req.json();
-      logger.info('Request body parsed successfully', { body: requestBody });
-    } catch (parseError) {
-      logger.error('Failed to parse request body', { error: parseError, rawBody });
-      return new Response(
-        JSON.stringify({ error: 'Invalid JSON in request body', details: String(parseError) }), 
-        { 
-          status: 400,
-          headers: { 'Content-Type': 'application/json' }
-        }
-      );
-    }
-
-    const { queryId, isKnown, groupId } = requestBody;
+    const { queryId, isKnown, groupId } = await req.json();
     
     if (!queryId) {
-      logger.warn('Missing queryId parameter in PATCH request');
       return new Response(
         JSON.stringify({ error: 'Missing queryId parameter' }), 
-        { 
-          status: 400,
-          headers: { 'Content-Type': 'application/json' }
-        }
+        { status: 400 }
       );
     }
     
@@ -212,64 +185,31 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     
     if (isKnown !== undefined) {
       updateData.isKnown = isKnown;
-      logger.info(`Setting query ${queryId} isKnown to ${isKnown}`);
     }
     
     if (groupId !== undefined) {
       updateData.groupId = groupId === null ? null : groupId;
-      logger.info(`Setting query ${queryId} groupId to ${groupId}`);
     }
     
-    try {
-      await db.update(normalizedQueries)
-        .set(updateData)
-        .where(eq(normalizedQueries.id, queryId));
-      
-      logger.info(`Successfully updated query ${queryId}`);
-      
-      // Always use this format for JSON responses
-      const jsonResponse = JSON.stringify({ success: true });
-      logger.info('Sending successful response:', jsonResponse);
-      
-      return new Response(jsonResponse, { 
-        status: 200,
-        headers: { 
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache',
-          'Expires': '0'
-        }
-      });
-    } catch (dbError) {
-      logger.error('Database error when updating discovered query', { error: dbError, queryId });
-      return new Response(
-        JSON.stringify({ 
-          error: 'Database operation failed', 
-          details: String(dbError) 
-        }), 
-        { 
-          status: 500,
-          headers: { 
-            'Content-Type': 'application/json',
-            'Cache-Control': 'no-cache, no-store, must-revalidate'
-          }
-        }
-      );
-    }
-  } catch (error) {
-    logger.error('Unexpected error updating discovered query:', error);
+    await db.update(normalizedQueries)
+      .set(updateData)
+      .where(eq(normalizedQueries.id, queryId));
+    
     return new Response(
-      JSON.stringify({ 
-        error: 'Failed to update query', 
-        details: String(error) 
-      }), 
+      JSON.stringify({ success: true }), 
       { 
-        status: 500,
-        headers: { 
+        status: 200,
+        headers: {
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache, no-store, must-revalidate'
         }
       }
+    );
+  } catch (error) {
+    logger.error('Error updating discovered query:', error);
+    return new Response(
+      JSON.stringify({ error: 'Failed to update query' }), 
+      { status: 500 }
     );
   }
 } 

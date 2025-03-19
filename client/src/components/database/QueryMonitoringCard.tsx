@@ -880,7 +880,7 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
             <AccordionTrigger className="hover:no-underline">
               <div className="flex items-center gap-2">
                 <Database className="h-4 w-4" />
-                Discovered Queries
+                <span>Discovered Queries</span>
               </div>
             </AccordionTrigger>
             <AccordionContent>
@@ -1104,8 +1104,8 @@ const QueryMonitoringCard = ({ databaseId }: { databaseId: number }) => {
                                     </span>
                                   )}
                                   <div className="font-mono text-sm truncate max-w-[500px]">
-                                    {query.queryText.split('\n')[0].substring(0, 100)}
-                                    {query.queryText.length > 100 ? '...' : ''}
+                                    {(query.queryText || '').split('\n')[0].substring(0, 100)}
+                                    {query.queryText && query.queryText.length > 100 ? '...' : ''}
                                   </div>
                                 </div>
                                 <div className="flex items-center gap-4 text-sm text-muted-foreground">

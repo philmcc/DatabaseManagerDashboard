@@ -94,6 +94,7 @@ export default function DatabaseDetails() {
   const [continuousKillCount, setContinuousKillCount] = useState(0);
   const [continuousKillStartTime, setContinuousKillStartTime] = useState<string | null>(null);
   const [autoRefreshQueries, setAutoRefreshQueries] = useState(false);
+  const [autoStoreQueries, setAutoStoreQueries] = useState(false);
 
   const { data: database, isLoading: isLoadingDatabase } = useQuery<SelectDatabaseConnection & {
     instance: {
@@ -534,6 +535,28 @@ export default function DatabaseDetails() {
     return () => clearInterval(intervalId);
   }, [isContinuousKilling, continuousKillSignature, queryClient, id]);
 
+  // Add useEffect to handle auto-storing queries
+  useEffect(() => {
+    const storeQueries = async () => {
+      if (autoStoreQueries && runningQueries && Array.isArray(runningQueries) && runningQueries.length > 0) {
+        console.log('Auto-storing queries:', runningQueries.length);
+        // Process queries sequentially to avoid overwhelming the server
+        for (const query of runningQueries) {
+          try {
+            saveQuerySample({ query });
+            console.log('Initiated storing query:', query.pid);
+          } catch (error) {
+            console.error('Error auto-storing query:', error);
+          }
+        }
+      }
+    };
+
+    if (autoStoreQueries) {
+      storeQueries();
+    }
+  }, [autoStoreQueries, runningQueries, saveQuerySample]);
+
   if (isLoadingDatabase) {
     return (
       <BaseLayout>
@@ -756,6 +779,17 @@ export default function DatabaseDetails() {
                         />
                         <Label htmlFor="auto-refresh-queries">
                           Auto-refresh queries {autoRefreshQueries ? '(every 5s)' : '(off)'}
+                        </Label>
+                      </div>
+                      
+                      <div className="flex items-center gap-2 ml-4">
+                        <Switch
+                          id="auto-store-queries"
+                          checked={autoStoreQueries}
+                          onCheckedChange={setAutoStoreQueries}
+                        />
+                        <Label htmlFor="auto-store-queries">
+                          Auto-store queries {autoStoreQueries ? '(on)' : '(off)'}
                         </Label>
                       </div>
                       

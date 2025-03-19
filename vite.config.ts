@@ -29,5 +29,12 @@ export default defineConfig({
       strict: false,
     },
   },
+  optimizeDeps: {
+    exclude: ['@replit/vite-plugin-runtime-error-modal'],
+    include: ['react', 'react-dom', '@tanstack/react-query'],
+    esbuildOptions: {
+      target: 'esnext'
+    }
+  },
   logLevel: 'warn',
 });
